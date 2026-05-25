@@ -1,0 +1,192 @@
+# 
+============================================================================
+== 
+# 1. LOAD REQUIRED LIBRARIES 
+# 
+============================================================================
+== 
+library(rtracklayer) 
+library(GenomicRanges) 
+library(GenomeInfoDb)   
+library(data.table)  
+library(dplyr) 
+library(ggplot2) 
+# 
+============================================================================
+== 
+# 2. DEFINE SYSTEM FILE PATHS 
+# 
+============================================================================
+== 
+unspliced_csv_path <- "C:/temp/UTR_workflow/Short_Long_Unspliced_Transcripts.csv" 
+spliced_csv_path   <- "C:/temp/UTR_workflow/Short_Long_Spliced_Transcripts.csv" 
+utr3_bed_path      <- "C:/temp/UTR_workflow/utr3.bed" 
+postar_path        
+rbp_ref_path       
+output_path        
+# 
+<- "C:/Users/Reshma Ajith/Downloads/human.txt.gz" 
+<- "C:/Users/Reshma Ajith/Downloads/Homo_sapiens.RBP.txt.gz" 
+<- "C:/temp/UTR_workflow/short_long_combined_splicing_3UTR_overlaps.csv" 
+============================================================================
+== 
+# 3. LOAD & UNIFY SPLICED + UNSPLICED TRANSCRIPTS FOR OVERLAP ENGINE 
+# 
+============================================================================
+== 
+cat("Loading and combining spliced and unspliced datasets...\n") 
+unspliced_tx <- fread(unspliced_csv_path) 
+spliced_tx   <- fread(spliced_csv_path) 
+# Combine both files vertically to process everything in one heavy pass 
+combined_tx <- rbind(unspliced_tx, spliced_tx, fill = TRUE) 
+selected_tx_clean <- unique(combined_tx, by = "transcript_id") 
+target_ids <- selected_tx_clean$transcript_id 
+# 
+============================================================================
+== 
+# 4. HIGH-SPEED GENOMIC OVERLAP PROCESSING (POSTAR3 PEAK SELECTION) 
+# 
+============================================================================
+== 
+cat("Processing 3'UTR BED spatial coordinate tracks...\n") 
+utr3_gr <- suppressWarnings(import(utr3_bed_path)) 
+utr3_gr <- utr3_gr[mcols(utr3_gr)$name %in% target_ids] 
+seqlevelsStyle(utr3_gr) <- "UCSC" 
+cat("Loading and pre-filtering raw POSTAR3 dataset (RAM Optimized)...\n") 
+postar_data <- fread(postar_path, sep="\t", header=FALSE) 
+colnames(postar_data) <- c("chr", "start", "end", "rbp_peak_id", "strand",  
+"rbp_name", "method", "cell_type", "source_id", "score") 
+target_chroms <- unique(as.character(seqnames(utr3_gr))) 
+postar_data <- postar_data[chr %in% target_chroms] 
+cat("Converting target sequences to GRanges structures...\n") 
+postar_gr <- makeGRangesFromDataFrame(postar_data, keep.extra.columns = TRUE) 
+seqlevelsStyle(postar_gr) <- "UCSC" 
+ 
+cat("Executing spatial findOverlaps genomic intersection matrix...\n") 
+hits <- findOverlaps(utr3_gr, postar_gr) 
+ 
+cat("Merging genomic overlap hits with combined transcript profiles...\n") 
+overlaps_final <- as.data.table(postar_data[subjectHits(hits)]) 
+overlaps_final$transcript_id <- mcols(utr3_gr)$name[queryHits(hits)] 
+ 
+final_output <- merge(overlaps_final, selected_tx_clean,  
+                      by = "transcript_id", all.x = TRUE, allow.cartesian = TRUE) 
+ 
+cat("Exporting intermediate master overlap table to disk...\n") 
+fwrite(final_output, output_path) 
+ 
+# 
+============================================================================
+== 
+# 5. DATABASE FUNCTIONAL ANNOTATION (DYNAMIC KEYWORD SEARCH) 
+# 
+============================================================================
+== 
+cat("Reading compressed external RBP text-mining reference dictionary...\n") 
+rbp_ref <- read.table(gzfile(rbp_ref_path), header = FALSE, sep = "\t",  
+                      stringsAsFactors = FALSE, quote = "") 
+colnames(rbp_ref) <- c("ensembl_id", "rbp_name", "entrez_id", "description", "aliases") 
+ 
+cat("Mapping dynamic functional modules via regex database descriptions...\n") 
+df_main <- as.data.frame(final_output) 
+ 
+df_refined <- df_main %>% 
+  left_join(rbp_ref %>% dplyr::select(rbp_name, description), by = "rbp_name") %>% 
+  mutate(functional_module = case_when( 
+    grepl("deadenylation|exosome|degradation|decay|catabolic", description, ignore.case = 
+TRUE) ~ "Active Decay", 
+    grepl("AU-rich|stabiliz|protection", description, ignore.case = TRUE) ~ "Structural Stability", 
+    grepl("cleavage|polyadenylation|CPSF|CSTF", description, ignore.case = TRUE) ~ "Length 
+Regulation (APA)", 
+    grepl("translation|initiation|ribosome", description, ignore.case = TRUE) ~ "Translational 
+Control", 
+    grepl("splicing|spliceosome|snRNP", description, ignore.case = TRUE) ~ "Processing/Splicing", 
+    TRUE ~ "Other/Multifunctional" 
+  )) 
+ 
+# 
+============================================================================
+== 
+# FUNCTION FOR MODEL RUNNING & PLOTTING (Reusable for both datasets) 
+# 
+============================================================================
+== 
+generate_clean_rbp_plot <- function(data_subset, categories, hex_colors, title_text, filename) { 
+   
+  # 1. Compile contingency matrix summary 
+  summary_df <- data_subset %>% 
+    filter(three_utr_category %in% categories) %>% 
+    group_by(three_utr_category, functional_module) %>% 
+    tally() %>% 
+    group_by(three_utr_category) %>% 
+    mutate(proportion = n / sum(n)) 
+   
+  # 2. Run independent Chi-squared Test 
+  contingency_table <- xtabs(n ~ three_utr_category + functional_module, data = summary_df) 
+  chi_res <- chisq.test(contingency_table, simulate.p.value = TRUE, B = 2000) 
+  res_df <- as.data.frame(chi_res$residuals) 
+   
+  # 3. Create gridless plot 
+  polished_plot <- ggplot(res_df, aes(x = functional_module, y = Freq, fill = three_utr_category)) + 
+    geom_bar(stat = "identity", position = position_dodge(width = 0.8), width = 0.7) + 
+    geom_hline(yintercept = c(-2, 2), linetype = "dashed", color = "#8B1E0F", linewidth = 0.8) + 
+    coord_flip() + 
+    scale_fill_manual(values = hex_colors) + 
+    labs( 
+      title = title_text, 
+      x = "Functional Module", 
+      y = "Pearson Residuals", 
+      fill = "three_utr_category" 
+    ) + 
+    theme_classic(base_size = 13, base_family = "sans") + 
+    theme( 
+      plot.title = element_text(face = "bold", size = 14, margin = margin(b = 10)), 
+      axis.title.x = element_text(face = "bold", size = 13, margin = margin(t = 12)), 
+      axis.title.y = element_text(face = "bold", size = 13, margin = margin(r = 12)), 
+      axis.text = element_text(color = "#111111", face = "bold", size = 11), 
+      axis.line = element_line(color = "#111111", linewidth = 0.8),  
+      axis.ticks = element_line(color = "#111111", linewidth = 0.8), 
+      axis.ticks.length = unit(0.15, "cm"), 
+      panel.grid.major = element_blank(),  
+      panel.grid.minor = element_blank(), 
+      legend.position = "right", 
+      legend.title = element_text(face = "bold", size = 11), 
+      legend.text = element_text(size = 10) 
+    ) 
+   
+  # Print to R panel and export save 
+print(polished_plot) 
+ggsave(paste0("C:/temp/UTR_workflow/", filename), plot = polished_plot, width = 8.5, height = 
+5.5, dpi = 300) 
+} 
+# 
+============================================================================
+== 
+# 6. EXECUTE PLOT 1: UNSPLICED TRANSCRIPTS ONLY 
+# 
+============================================================================
+== 
+cat("Processing and rendering Plot 1: Unspliced...\n") 
+generate_clean_rbp_plot( 
+data_subset = df_refined, 
+categories  = c("Long_Unspliced", "Short_Unspliced"), 
+hex_colors  = c("Long_Unspliced" = "#F2786D", "Short_Unspliced" = "#14C3C7"), 
+title_text  = "RBP Module Association: Unspliced Transcripts", 
+filename    = "Clean_RBP_Enrichment_Unspliced_Plot.png" 
+) 
+# 
+============================================================================
+== 
+# 7. EXECUTE PLOT 2: SPLICED TRANSCRIPTS ONLY 
+# 
+============================================================================
+== 
+cat("Processing and rendering Plot 2: Spliced...\n") 
+generate_clean_rbp_plot( 
+data_subset = df_refined, 
+categories  = c("Long_Spliced", "Short_Spliced"), 
+hex_colors  = c("Long_Spliced" = "#415A8C", "Short_Spliced" = "#E34A33"), 
+title_text  = "RBP Module Association: Spliced Transcripts", 
+filename    = "Clean_RBP_Enrichment_Spliced_Plot.png" 
+) 
+cat("Done! Both unique plots successfully computed and saved independently.\n")
