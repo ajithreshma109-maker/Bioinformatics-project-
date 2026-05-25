@@ -1,0 +1,110 @@
+# 
+============================================================================
+== 
+# UNIFIED PLOTTING SCRIPT: 5' AND 3' UTR FREQUENCY POLYGONS 
+# 
+============================================================================
+== 
+library(ggplot2) 
+library(dplyr) 
+# ------------------------------------------------------------------------------ 
+# SECTION 1: THE 5' UTR FREQUENCY POLYGON 
+# ------------------------------------------------------------------------------ 
+message(">>> Generating 5' UTR Frequency Polygon...") 
+counts_filepath_5 <- "C:/temp/UTR_workflow/merged_utr5_splicing_results_counts.csv" 
+polygon_data_5 <- read.csv(counts_filepath_5, header = TRUE) %>% 
+filter(!is.na(num_exons_5UTR) & !is.na(loop_type)) %>% 
+filter(loop_type %in% c("Hairpin Loop", "Multibranch Junction")) %>% 
+mutate( 
+exon_group = case_when(num_exons_5UTR >= 7 ~ "7+", TRUE ~ 
+as.character(num_exons_5UTR)), 
+exon_group = factor(exon_group, levels = c("1", "2", "3", "4", "5", "6", "7+")), 
+Secondary_Structure = factor(loop_type, levels = c("Hairpin Loop", "Multibranch Junction")) 
+) 
+binned_counts_5 <- polygon_data_5 %>% 
+group_by(exon_group, Secondary_Structure) %>% 
+summarise(Transcript_Count = n(), .groups = 'drop') 
+wilcox_result_5 <- wilcox.test(num_exons_5UTR ~ Secondary_Structure, data = polygon_data_5) 
+p_val_string_5  <- paste0("Significant shift detected (p = ", format.pval(wilcox_result_5$p.value, 
+digits = 3), ")") 
+ 
+poly_5 <- ggplot(binned_counts_5, aes(x = exon_group, y = Transcript_Count, color = 
+Secondary_Structure, group = Secondary_Structure)) +  
+  geom_line(linewidth = 1.3, alpha = 0.9) +  
+  scale_color_manual(values = c("Hairpin Loop" = "#3399CC", "Multibranch Junction" = 
+"#FF9900")) +  
+  scale_x_discrete(expand = expansion(mult = c(0.02, 0.02))) +  
+  scale_y_continuous(expand = expansion(mult = c(0, 0.05))) +  
+  labs(title = "Detailed 5' UTR Distribution: 1-7+ Exons", subtitle = p_val_string_5, x = "Number of 
+Exons", y = "Count of Transcripts", color = "Loop Type") +  
+  theme_classic(base_size = 14) +  
+  theme( 
+    plot.title = element_text(face = "bold", size = 14, margin = margin(b = 2)),  
+    plot.subtitle = element_text(size = 11, color = "gray30", margin = margin(b = 15)),  
+    axis.title.x = element_text(face = "bold", size = 12, margin = margin(t = 8)),  
+    axis.title.y = element_text(face = "bold", size = 12, margin = margin(r = 8)),  
+    axis.text.x  = element_text(face = "plain"),  
+    axis.text.y  = element_text(face = "plain"),  
+    panel.grid.major = element_blank(),  
+    panel.grid.minor = element_blank(),  
+    axis.line = element_line(color = "black", linewidth = 0.8),  
+    legend.position = "bottom",  
+    legend.title = element_text(face = "bold", size = 11),  
+    plot.margin = margin(5, 15, 5, 5, "pt") 
+  ) 
+ 
+ 
+# ------------------------------------------------------------------------------ 
+# SECTION 2: THE 3' UTR FREQUENCY POLYGON 
+# ------------------------------------------------------------------------------ 
+message(">>> Generating 3' UTR Frequency Polygon...") 
+counts_filepath_3 <- "C:/temp/UTR_workflow/merged_utr3_splicing_results_with_counts.csv" 
+polygon_data_3 <- read.csv(counts_filepath_3, header = TRUE) %>% 
+filter(!is.na(num_exons_3UTR) & !is.na(loop_type)) %>% 
+filter(loop_type %in% c("Hairpin Loop", "Multibranch Junction")) %>% 
+mutate( 
+exon_group = case_when(num_exons_3UTR >= 7 ~ "7+", TRUE ~ 
+as.character(num_exons_3UTR)), 
+exon_group = factor(exon_group, levels = c("1", "2", "3", "4", "5", "6", "7+")), 
+Secondary_Structure = factor(loop_type, levels = c("Hairpin Loop", "Multibranch Junction")) 
+) 
+binned_counts_3 <- polygon_data_3 %>% 
+group_by(exon_group, Secondary_Structure) %>% 
+summarise(Transcript_Count = n(), .groups = 'drop') 
+wilcox_result_3 <- wilcox.test(num_exons_3UTR ~ Secondary_Structure, data = polygon_data_3) 
+p_val_string_3  <- paste0("Significant shift detected (p = ", format.pval(wilcox_result_3$p.value, 
+digits = 3), ")") 
+poly_3 <- ggplot(binned_counts_3, aes(x = exon_group, y = Transcript_Count, color = 
+Secondary_Structure, group = Secondary_Structure)) +  
+geom_line(linewidth = 1.3, alpha = 0.9) +  
+scale_color_manual(values = c("Hairpin Loop" = "#3399CC", "Multibranch Junction" = 
+"#FF9900")) +  
+scale_x_discrete(expand = expansion(mult = c(0.02, 0.02))) +  
+scale_y_continuous(expand = expansion(mult = c(0, 0.05))) +  
+labs(title = "Detailed 3' UTR Distribution: 1-7+ Exons", subtitle = p_val_string_3, x = "Number of 
+Exons", y = "Count of Transcripts", color = "Loop Type") +  
+theme_classic(base_size = 14) +  
+theme( 
+plot.title = element_text(face = "bold", size = 14, margin = margin(b = 2)),  
+plot.subtitle = element_text(size = 11, color = "gray30", margin = margin(b = 15)),  
+axis.title.x = element_text(face = "bold", size = 12, margin = margin(t = 8)),  
+axis.title.y = element_text(face = "bold", size = 12, margin = margin(r = 8)),  
+axis.text.x  = element_text(face = "plain"),  
+axis.text.y  = element_text(face = "plain"),  
+panel.grid.major = element_blank(),  
+panel.grid.minor = element_blank(),  
+axis.line = element_line(color = "black", linewidth = 0.8),  
+legend.position = "bottom",  
+legend.title = element_text(face = "bold", size = 11),  
+plot.margin = margin(5, 15, 5, 5, "pt") 
+) 
+# ------------------------------------------------------------------------------ 
+# SECTION 3: RENDER AND SAVE GRAPH ASSETS 
+# ------------------------------------------------------------------------------ 
+print(poly_5) 
+print(poly_3) 
+ggsave("C:/temp/UTR_workflow/5_UTR_Exon_Structure_Frequency.png", plot = poly_5, width = 
+8.5, height = 4.2, dpi = 300) 
+ggsave("C:/temp/UTR_workflow/3_UTR_Exon_Structure_Frequency.png", plot = poly_3, width = 
+8.5, height = 4.2, dpi = 300) 
+message(">>> SUCCESS: Both clean frequency polygon plots saved successfully!")
