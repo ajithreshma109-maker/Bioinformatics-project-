@@ -1,0 +1,107 @@
+# Ensure you have the necessary packages installed: 
+# install.packages("ggplot2") 
+# install.packages("ggsignif") 
+library(ggplot2) 
+library(ggsignif) 
+# 1. Load Data 
+data <- read.csv("C:/Users/Reshma Ajith/Downloads/utr_expression_filtered_clean.csv") 
+# Optional Step: If your UTR columns contain text sequences instead of numeric lengths,  
+# uncomment the two lines below to automatically calculate the lengths: 
+# data$three_utr <- nchar(data$three_utr) 
+# data$five_utr  <- nchar(data$five_utr) 
+# ========================================================================= 
+# PART 1: UTR LENGTH DISTRIBUTION PLOTS (NO GRID LINES) 
+# ========================================================================= 
+# Calculate Medians 
+median_5 <- median(data$five_utr, na.rm = TRUE) 
+median_3 <- median(data$three_utr, na.rm = TRUE) 
+# 1A. 5' UTR Length Distribution Plot 
+plot_5utr_dist <- ggplot(data, aes(x = five_utr)) + 
+geom_density(fill = "#fca34d", color = "black", size = 0.6) + 
+scale_x_log10(breaks = c(1, 10, 100, 1000)) + 
+geom_vline(xintercept = median_5, linetype = "dashed", size = 0.8) + 
+labs( 
+    title = "Distribution of 5' UTR Lengths", 
+    subtitle = paste0("Threshold (median) = ", round(median_5), " nt"), 
+    x = "5' UTR length (nt, log scale)", 
+    y = "Density" 
+  ) + 
+  theme_classic() + 
+  theme( 
+    panel.grid.major = element_blank(),  
+    panel.grid.minor = element_blank(), 
+    plot.title = element_text(size = 12, face = "bold") 
+  ) 
+ 
+# 1B. 3' UTR Length Distribution Plot 
+plot_3utr_dist <- ggplot(data, aes(x = three_utr)) + 
+  geom_density(fill = "#fca34d", color = "black", size = 0.6) + 
+  scale_x_log10(breaks = c(10, 100, 1000, 10000)) + 
+  geom_vline(xintercept = median_3, linetype = "dashed", size = 0.8) + 
+  labs( 
+    title = "Distribution of 3' UTR Lengths", 
+    subtitle = paste0("Threshold (median) = ", round(median_3), " nt"), 
+    x = "3' UTR length (nt, log scale)", 
+    y = "Density" 
+  ) + 
+  theme_classic() + 
+  theme( 
+    panel.grid.major = element_blank(),  
+    panel.grid.minor = element_blank(), 
+    plot.title = element_text(size = 12, face = "bold") 
+  ) 
+ 
+ 
+# ========================================================================= 
+# PART 2: POLISHED EXPRESSION BOXPLOTS WITH P-VALUE BRACKETS 
+# ========================================================================= 
+# Standardise and clean text casing for classification columns 
+data$five_utr_class  <- tools::toTitleCase(tolower(trimws(data$five_utr_class))) 
+data$three_utr_class <- tools::toTitleCase(tolower(trimws(data$three_utr_class))) 
+# Filter clean subsets for plotting 
+plot_data_5 <- data[data$five_utr_class %in% c("Short", "Long") & !is.na(data$logTPM), ] 
+plot_data_3 <- data[data$three_utr_class %in% c("Short", "Long") & !is.na(data$logTPM), ] 
+# Reorder factor levels so 'Short' plots first on the left 
+plot_data_5$five_utr_class  <- factor(plot_data_5$five_utr_class,  levels = c("Short", "Long")) 
+plot_data_3$three_utr_class <- factor(plot_data_3$three_utr_class, levels = c("Short", "Long")) 
+# 2A. 5' UTR Expression Boxplot 
+plot_5utr_box <- ggplot(plot_data_5, aes(x = five_utr_class, y = logTPM, fill = five_utr_class)) + 
+geom_boxplot(width = 0.4, outlier.shape = NA, color = "#222222") + 
+scale_fill_manual(values = c("Short" = "#5b9bd5", "Long" = "#e87a5d")) + 
+ggsignif::geom_signif( 
+comparisons = list(c("Short", "Long")), 
+test = "wilcox.test", 
+map_signif_level = function(p) paste0("p = ", formatC(p, format = "e", digits = 1)), 
+y_position = 12.5 
+) + 
+labs(title = "Median log10 TPM for Short vs Long 5'UTRs", x = "5'UTR Type", y = "Median TPM 
+(log10)") + 
+expand_limits(y = 14) +  
+theme_classic() + 
+theme(legend.position = "none", plot.title = element_text(face = "bold", hjust = 0.5)) 
+# 2B. 3' UTR Expression Boxplot 
+plot_3utr_box <- ggplot(plot_data_3, aes(x = three_utr_class, y = logTPM, fill = three_utr_class)) 
++ 
+geom_boxplot(width = 0.4, outlier.shape = NA, color = "#222222") + 
+scale_fill_manual(values = c("Short" = "#5b9bd5", "Long" = "#e87a5d")) + 
+ggsignif::geom_signif( 
+comparisons = list(c("Short", "Long")), 
+test = "wilcox.test", 
+map_signif_level = function(p) paste0("p = ", formatC(p, format = "e", digits = 1)), 
+y_position = 12.5 
+) + 
+labs(title = "Median log10 TPM for Short vs Long 3'UTRs", x = "3'UTR Type", y = "Median TPM 
+(log10)") + 
+expand_limits(y = 14) +  
+theme_classic() + 
+theme(legend.position = "none", plot.title = element_text(face = "bold", hjust = 0.5)) 
+# ========================================================================= 
+# DISPLAY IMAGES SEQUENTIALLY ON THE RSTUDIO PLOTS PANEL 
+# ========================================================================= 
+# Clear background graphics history 
+while(!is.null(dev.list())) dev.off() 
+# Print all 4 plots. Use the arrow keys in your Plots panel to cycle them. 
+print(plot_5utr_dist) 
+print(plot_3utr_dist) 
+print(plot_5utr_box) 
+print(plot_3utr_box)
