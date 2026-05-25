@@ -1,0 +1,125 @@
+library(dplyr)
+library(stringr)
+
+# 1. Define input and output file paths
+utr5_rnafold_file <- "C:/temp/UTR_workflow/transcriptome_results.txt"
+utr3_rnafold_files <- c(
+  "C:/Users/Reshma Ajith/Downloads/part1_results.txt",
+  "C:/Users/Reshma Ajith/Downloads/part2_results.txt",
+  "C:/Users/Reshma Ajith/Downloads/part3_results.txt",
+  "C:/Users/Reshma Ajith/Downloads/part4_results.txt"
+)
+
+utr5_counts_file <- "C:/temp/UTR_workflow/merged_utr5_splicing_results_counts.csv"
+utr3_counts_file <- "C:/temp/UTR_workflow/merged_utr3_splicing_results_with_counts.csv"
+
+# 2. Helper function to parse RNAfold outputs and classify structures
+parse_and_classify_rna <- function(file_paths) {
+  all_lines <- c()
+  for (f in file_paths) {
+    if (file.exists(f)) {
+      all_lines <- c(all_lines, readLines(f, warn = FALSE))
+    }
+  }
+  
+  tx_ids <- c()
+  structures <- c()
+  
+  # RNAfold standard output format loops across 3-line blocks:
+  # Line 1: >Transcript_ID
+  # Line 2: Sequence
+  # Line 3: Dot-bracket structure matrix and MFE value
+  i <- 1
+  while (i <= length(all_lines)) {
+    if (startsWith(all_lines[i], ">")) {
+      # Extract transcript name and strip down to bare ID
+      tx_name <- sub("^>", "", all_lines[i])
+      tx_name <- sub("\\s+.*$", "", tx_name) # Remove trailing metadata descriptors
+      tx_name <- sub("\\..*", "", tx_name)     # Strip version dots
+      
+      # Step to locate the structural row containing brackets
+      struct_line <- ""
+      for (j in (i+1):min(i+5, length(all_lines))) {
+        if (grep("[\\.\\(\\)]", all_lines[j])) {
+          struct_line <- all_lines[j]
+          break
+        }
+      }
+      
+      if (struct_line != "") {
+        # Extract purely the dot-bracket string by discarding the MFE value at the end
+        db_string <- sub("\\s+\\([-\\d\\.\\s]+\\)$", "", struct_line)
+        db_string <- gsub("[^\\.\\(\\)]", "", db_string) # Keep only structural characters
+        
+        tx_ids <- c(tx_ids, tx_name)
+        structures <- c(structures, db_string)
+      }
+    }
+    i <- i + 1
+  }
+  
+  # Core Structural Classification Engine
+  # An independent stem loop opens and closes once: ( . . . )
+  # Multi-branch junctions are defined by multiple distinct stems separated by unpaired junctions.
+  # We identify this by detecting independent stem groups like "(...) ... (...)" using regex tracking.
+  classify_structure <- function(db) {
+    if (!grepl("\\(", db)) return("Unstructured")
+    
+    # Remove internal nested structures to expose the top-level branches
+    # This loop continually compresses inner base pairs () down to clean strings
+    cleaned <- db
+    old_cleaned <- ""
+    while (cleaned != old_cleaned) {
+      old_cleaned <- cleaned
+      cleaned <- gsub("\\([^\\(\\)]*\\)", "B", cleaned) # Collapse base stems into branch units 'B'
+    }
+    
+    # Count how many distinct top-level branches (B) are clustered
+    branch_count <- str_count(cleaned, "B")
+    
+    if (branch_count > 1) {
+      return("Multi-Branch Junction (MBJ)")
+    } else {
+      return("Hairpin Stem-Loop")
+    }
+  }
+  
+  classifications <- sapply(structures, classify_structure)
+  
+  return(data.frame(
+    transcript_id = tx_ids,
+    dot_bracket = structures,
+    rna_structure_class = classifications,
+    stringsAsFactors = FALSE
+  ))
+}
+
+# 3. Parse RNAfold structures for 5' and 3' datasets
+print("Parsing 5' UTR RNA structures...")
+utr5_structs <- parse_and_classify_rna(utr5_rnafold_file)
+
+print("Parsing 3' UTR RNA structures across parts...")
+utr3_structs <- parse_and_classify_rna(utr3_files)
+
+# 4. Integrate structural predictions back into existing counts files
+if (file.exists(utr5_counts_file)) {
+  utr5_counts <- read.csv(utr5_counts_file, stringsAsFactors = FALSE)
+  utr5_counts$transcript_id <- sub("\\..*", "", utr5_counts$transcript_id)
+  
+  utr5_merged <- merge(utr5_counts, utr5_structs, by = "transcript_id", all.x = TRUE)
+  utr5_merged$rna_structure_class[is.na(utr5_merged$rna_structure_class)] <- "Unknown/No Data"
+  
+  write.csv(utr5_merged, file = utr5_counts_file, row.names = FALSE)
+  print("5' UTR structural classifications integrated successfully!")
+}
+
+if (file.exists(utr3_counts_file)) {
+  utr3_counts <- read.csv(utr3_counts_file, stringsAsFactors = FALSE)
+  utr3_counts$transcript_id <- sub("\\..*", "", utr3_counts$transcript_id)
+  
+  utr3_merged <- merge(utr3_counts, utr3_structs, by = "transcript_id", all.x = TRUE)
+  utr3_merged$rna_structure_class[is.na(utr3_merged$rna_structure_class)] <- "Unknown/No Data"
+  
+  write.csv(utr3_merged, file = utr3_counts_file, row.names = FALSE)
+  print("3' UTR structural classifications integrated successfully!")
+}
