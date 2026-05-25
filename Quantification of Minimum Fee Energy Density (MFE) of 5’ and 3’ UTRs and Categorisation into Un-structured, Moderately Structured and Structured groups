@@ -1,0 +1,282 @@
+# 
+============================================================================
+== 
+# MASTER TRANSCRIPTOME PIPELINE: JOINT 5' AND 3' UTR PIPELINE ANALYSIS 
+# 
+============================================================================
+== 
+ 
+library(ggplot2) 
+library(dplyr) 
+library(stringr) 
+ 
+# Establish directories and create missing folders 
+dir.create("C:/temp/UTR_workflow/", recursive = TRUE, showWarnings = FALSE) 
+ 
+# ------------------------------------------------------------------------------ 
+# PHASE 1A: PARSE 5' UTR RAW THERMODYNAMIC OUTPUTS 
+# ------------------------------------------------------------------------------ 
+file_5utr <- "C:/temp/UTR_workflow/transcriptome_results.txt" 
+ 
+ids_5  <- c() 
+mfes_5 <- c() 
+ 
+if (file.exists(file_5utr)) { 
+    message(">>> Parsing multi-line raw structures from 5' UTR text archive...") 
+    lines_5 <- readLines(file_5utr) 
+    headers_5 <- which(grepl("ENST", lines_5) & !grepl("\\(-", lines_5)) 
+     
+    for (idx in headers_5) { 
+        header_text <- lines_5[idx] 
+        id_match <- regmatches(header_text, regexpr("ENST[0-9]+", header_text)) 
+         
+        search_range <- idx + 1:3 
+        search_range <- search_range[search_range <= length(lines_5)] 
+        mfe_line_idx <- search_range[grepl("\\(-[0-9.]+\\)", lines_5[search_range])] 
+         
+        if (length(mfe_line_idx) > 0 && !is.na(mfe_line_idx)) { 
+            mfe_text <- lines_5[mfe_line_idx] 
+            mfe_match <- regmatches(mfe_text, regexpr("\\(-[0-9.]+\\)", mfe_text)) 
+            mfe_numeric <- as.numeric(gsub("[() ]", "", mfe_match)) 
+             
+            ids_5  <- c(ids_5, id_match) 
+            mfes_5 <- c(mfes_5, mfe_numeric) 
+        } 
+    } 
+    mfe_5_df <- data.frame(transcript_id = trimws(toupper(ids_5)), MFE_5 = mfes_5, 
+stringsAsFactors = FALSE) %>% 
+        distinct(transcript_id, .keep_all = TRUE) 
+} else { 
+    stop(paste("CRITICAL ERROR: Standalone 5' UTR raw text file completely missing at:", 
+file_5utr)) 
+} 
+ 
+ 
+# ------------------------------------------------------------------------------ 
+# PHASE 1B: PARSE ALL 4 SEQUENTIAL CHUNKS OF 3' UTR THERMODYNAMIC OUTPUTS 
+# ------------------------------------------------------------------------------ 
+utr3_files <- c( 
+    "C:/Users/Reshma Ajith/Downloads/part1_results.txt", 
+    "C:/Users/Reshma Ajith/Downloads/part2_results.txt", 
+    "C:/Users/Reshma Ajith/Downloads/part3_results.txt", 
+    "C:/Users/Reshma Ajith/Downloads/part4_results.txt" 
+) 
+ 
+ids_3  <- c() 
+mfes_3 <- c() 
+ 
+message(">>> Parsing multi-line tracking blocks across all 4 parts of 3' UTR text files...") 
+ 
+for (file_3utr in utr3_files) { 
+    if (file.exists(file_3utr)) { 
+        message(paste("    Processing:", basename(file_3utr))) 
+        lines_3 <- readLines(file_3utr) 
+         
+        current_id <- NULL 
+        for (i in 1:length(lines_3)) { 
+            current_line <- lines_3[i] 
+             
+            if (grepl("ENST[0-9]+", current_line) && !grepl("\\(", current_line)) { 
+                current_id <- str_extract(current_line, "ENST[0-9]+") 
+            } 
+             
+            if (grepl("\\(\\s*-?[0-9.]+\\)\\s*$", current_line)) { 
+                mfe_match <- str_extract(current_line, "\\(\\s*-?[0-9.]+\\)\\s*$") 
+                mfe_numeric <- as.numeric(gsub("[() ]", "", mfe_match)) 
+                 
+                if (!is.null(current_id) && !is.na(mfe_numeric)) { 
+                    ids_3  <- c(ids_3, current_id) 
+                    mfes_3 <- c(mfes_3, mfe_numeric) 
+                    current_id <- NULL  
+                } 
+            } 
+        } 
+    } else { 
+        warning(paste("    SKIPPED: Missing expected file location at:", file_3utr)) 
+} 
+} 
+mfe_3_df <- data.frame(transcript_id = trimws(toupper(ids_3)), MFE_3 = mfes_3, 
+stringsAsFactors = FALSE) %>% 
+distinct(transcript_id, .keep_all = TRUE) 
+# ------------------------------------------------------------------------------ 
+# PHASE 2: METADATA EXTRACTION & STRUCTURAL INTEGRITY CORRECTION 
+# ------------------------------------------------------------------------------ 
+message(">>> Importing source files and compiling joint matrix profiles...") 
+# Import lengths mapping metadata 
+length_data <- read.csv("C:/Users/Reshma Ajith/Downloads/utr_expression_filtered_clean.csv", 
+header = TRUE) 
+length_map  <- length_data %>%  
+dplyr::select(transcript_id, five_utr, three_utr) %>% 
+mutate(transcript_id = trimws(toupper(transcript_id))) 
+# Import functional categorizations metadata 
+master_categories <- read.csv("C:/temp/UTR_workflow/Master_Transcript_Categories.csv", 
+header = TRUE) %>% 
+distinct(transcript_id, .keep_all = TRUE) %>% 
+mutate(transcript_id = trimws(toupper(transcript_id))) 
+# Establish core master matrix using left_join structures to insulate dataset from point dropouts 
+joint_master_pipeline_matrix <- length_map %>% 
+left_join(mfe_5_df, by = "transcript_id") %>% 
+left_join(mfe_3_df, by = "transcript_id") %>% 
+left_join(master_categories, by = "transcript_id") %>% 
+# Filter out empty or unphysical coordinate dimensions 
+    filter(five_utr >= 15 & three_utr >= 20) %>% 
+    mutate( 
+        # Native, accurate R density transformations (MFE / Segment Base Size) 
+        mfe_density_5utr = MFE_5 / five_utr, 
+        mfe_density_3utr = MFE_3 / three_utr, 
+         
+        # Splicing determinations driven directly by exon architecture counts rule 
+        Splicing_Status_5 = factor(ifelse(num_exons_5utr == 1, "Unspliced", "Spliced"), levels = 
+c("Unspliced", "Spliced")), 
+        Splicing_Status_3 = factor(ifelse(is_spliced_3UTR == TRUE, "Spliced", "Unspliced"), levels = 
+c("Unspliced", "Spliced")) 
+    ) %>% 
+    # Remove database calculation artifacts 
+    filter(mfe_density_5utr >= -3.0 & mfe_density_3utr >= -3.0) 
+ 
+# Isolate statistical quartile boundary tiers per subpopulation 
+q25_5 <- quantile(joint_master_pipeline_matrix$mfe_density_5utr, 0.25, na.rm = TRUE) 
+q75_5 <- quantile(joint_master_pipeline_matrix$mfe_density_5utr, 0.75, na.rm = TRUE) 
+ 
+q25_3 <- quantile(joint_master_pipeline_matrix$mfe_density_3utr, 0.25, na.rm = TRUE) 
+q75_3 <- quantile(joint_master_pipeline_matrix$mfe_density_3utr, 0.75, na.rm = TRUE) 
+ 
+# Update descriptive structural classification designations 
+joint_master_pipeline_matrix <- joint_master_pipeline_matrix %>% 
+  mutate( 
+    Structural_Status_5 = case_when( 
+        mfe_density_5utr <= q25_5                        ~ "Structured", 
+        mfe_density_5utr > q25_5 & mfe_density_5utr <= q75_5 ~ "Moderate", 
+        mfe_density_5utr > q75_5                        ~ "Unstructured" 
+    ), 
+    Structural_Status_5 = factor(Structural_Status_5, levels = c("Unstructured", "Moderate", 
+"Structured")), 
+Structural_Status_3 = case_when( 
+mfe_density_3utr <= q25_3                        
+~ "Structured", 
+mfe_density_3utr > q25_3 & mfe_density_3utr <= q75_3 ~ "Moderate", 
+mfe_density_3utr > q75_3                        
+), 
+~ "Unstructured" 
+Structural_Status_3 = factor(Structural_Status_3, levels = c("Unstructured", "Moderate", 
+"Structured")) 
+) 
+# Export structural matrix data dumps 
+write.csv(joint_master_pipeline_matrix, 
+"C:/temp/UTR_workflow/Master_3UTR_Data_Fixed_Final.csv", row.names = FALSE) 
+write.csv(joint_master_pipeline_matrix, 
+"C:/temp/UTR_workflow/Master_Transcript_Categories_with_MFE.csv", row.names = FALSE) 
+message(">>> Permanent master CSV files written cleanly to UTR_workflow.") 
+# 
+============================================================================
+== 
+# PHASE 3: GRAPH PLOTTING GENERATION (PASTEL GRAPH ENGINE SYSTEM) 
+# 
+============================================================================
+== 
+message(">>> Dispatching visual rendering engines...") 
+# ------------------------------------------------------------------------------ 
+# PLOT 1: 5' UTR DISTRIBUTION PLOT (UNBOLDED AXES) 
+# ------------------------------------------------------------------------------ 
+dens5 <- density(joint_master_pipeline_matrix$mfe_density_5utr, na.rm = TRUE) 
+df_dens5 <- data.frame(x = dens5$x, y = dens5$y) 
+lbl_l5 <- paste0("Structured (<= ", round(q25_5, 2), ")"); lbl_m5 = paste0("Moderate (", 
+round(q25_5, 2), " to ", round(q75_5, 2), ")"); lbl_u5 = paste0("Unstructured (> ", round(q75_5, 2), 
+")") 
+df_dens5 <- df_dens5 %>% mutate(group = factor(case_when(x <= q25_5 ~ lbl_l5, x > q25_5 & x 
+<= q75_5 ~ lbl_m5, x > q75_5 ~ lbl_u5), levels = c(lbl_u5, lbl_m5, lbl_l5))) 
+dist_5_plot <- ggplot(df_dens5) + 
+geom_area(aes(x = x, y = y, fill = group), alpha = 0.85) + 
+geom_line(aes(x = x, y = y), color = "black", linewidth = 1.1) + 
+geom_vline(xintercept = c(q25_5, q75_5), linetype = "dashed", color = "gray40", linewidth = 0.6) 
++ 
+scale_fill_manual(values = setNames(c("#56B4E9", "#ed7d31", "#F8766D"), c(lbl_u5, lbl_m5, 
+lbl_l5))) + 
+scale_y_continuous(expand = expansion(mult = c(0, 0.05))) + 
+labs(title = "5' UTR MFE Density Distribution", x = "MFE Density Score (kcal/mol/nt)", y = 
+"Density", fill = "Structural Status") + 
+theme_classic(base_size = 14) + theme(plot.title = element_text(face = "bold", size = 14, margin 
+= margin(b=15)), axis.title.x = element_text(face = "plain"), axis.title.y = element_text(face = 
+"plain"), legend.position = "right", plot.margin = margin(10, 15, 10, 10, "pt")) 
+ggsave("C:/temp/UTR_workflow/5_UTR_MFE_Density_Distribution.png", plot = dist_5_plot, 
+width = 8.5, height = 5.5, dpi = 300) 
+# ------------------------------------------------------------------------------ 
+# PLOT 2: 3' UTR DISTRIBUTION PLOT (UNBOLDED AXES) 
+# ------------------------------------------------------------------------------ 
+dens3 <- density(joint_master_pipeline_matrix$mfe_density_3utr, na.rm = TRUE) 
+df_dens3 <- data.frame(x = dens3$x, y = dens3$y) 
+lbl_l3 <- paste0("Structured (<= ", round(q25_3, 2), ")"); lbl_m3 = paste0("Moderate (", 
+round(q25_3, 2), " to ", round(q75_3, 2), ")"); lbl_u3 = paste0("Unstructured (> ", round(q75_3, 2), 
+")") 
+df_dens3 <- df_dens3 %>% mutate(group = factor(case_when(x <= q25_3 ~ lbl_l3, x > q25_3 & x 
+<= q75_3 ~ lbl_m3, x > q75_3 ~ lbl_u3), levels = c(lbl_u3, lbl_m3, lbl_l3))) 
+dist_3_plot <- ggplot(df_dens3) + 
+geom_area(aes(x = x, y = y, fill = group), alpha = 0.85) + 
+geom_line(aes(x = x, y = y), color = "black", linewidth = 1.1) + 
+geom_vline(xintercept = c(q25_3, q75_3), linetype = "dashed", color = "gray40", linewidth = 0.6) 
++ 
+scale_fill_manual(values = setNames(c("#56B4E9", "#ed7d31", "#F8766D"), c(lbl_u3, lbl_m3, 
+lbl_l3))) + 
+scale_y_continuous(expand = expansion(mult = c(0, 0.05))) + 
+labs(title = "3' UTR MFE Density Distribution", x = "MFE Density Score (kcal/mol/nt)", y = 
+"Density", fill = "Structural Status") + 
+theme_classic(base_size = 14) + theme(plot.title = element_text(face = "bold", size = 14, margin 
+= margin(b=15)), axis.title.x = element_text(face = "plain"), axis.title.y = element_text(face = 
+"plain"), legend.position = "right", plot.margin = margin(10, 15, 10, 10, "pt")) 
+ggsave("C:/temp/UTR_workflow/3_UTR_MFE_Density_Distribution.png", plot = dist_3_plot, 
+width = 8.5, height = 5.5, dpi = 300) 
+# ------------------------------------------------------------------------------ 
+# PLOT 3: 5' UTR STRUCTURAL CORRELATION GRAPH (BOLD AXES, NO DASHED MEDIAN) 
+# ------------------------------------------------------------------------------ 
+corr_5_plot <- ggplot(joint_master_pipeline_matrix, aes(x = five_utr, y = mfe_density_5utr, color 
+= Structural_Status_5)) + 
+geom_density_2d(aes(group = 1), color = "grey80", linewidth = 0.4, alpha = 0.5) + 
+geom_point(alpha = 0.6, size = 1.3) + 
+scale_color_manual(values = c("Unstructured" = "#56B4E9", "Moderate" = "#ed7d31", 
+"Structured" = "#F8766D")) + 
+facet_wrap(~ Splicing_Status_5, scales = "free_x") + 
+coord_cartesian(xlim = c(0, 1000), ylim = c(-0.6, 0.0)) + # Confirmed Y-limits match reference 
+labs(x = "5' UTR Length (bp)", y = "MFE Density (kcal/mol/nt)", title = "5' UTR Structural 
+Correlation", color = "Structural Status") + 
+theme_bw(base_size = 14) + 
+theme(plot.title = element_text(face = "bold", size = 14, margin = margin(b=15)), axis.title.x = 
+element_text(face = "bold"), axis.title.y = element_text(face = "bold"), strip.background = 
+element_blank(), strip.text = element_text(face = "bold", size = 13), legend.position = "bottom", 
+panel.grid.major = element_blank(), panel.grid.minor = element_blank(), plot.margin = 
+margin(10, 25, 15, 10, "pt")) 
+ggsave("C:/temp/UTR_workflow/5_UTR_Structural_Correlation.png", plot = corr_5_plot, width = 
+8.5, height = 6.2, dpi = 300) 
+# ------------------------------------------------------------------------------ 
+# PLOT 4: 3' UTR STRUCTURAL CORRELATION GRAPH (BOLD AXES, NO DASHED MEDIAN) 
+# ------------------------------------------------------------------------------ 
+corr_3_plot <- ggplot(joint_master_pipeline_matrix, aes(x = three_utr, y = mfe_density_3utr, 
+color = Structural_Status_3)) + 
+geom_density_2d(aes(group = 1), color = "grey80", linewidth = 0.4, alpha = 0.5) + 
+geom_point(alpha = 0.6, size = 1.3) + 
+scale_color_manual(values = c("Unstructured" = "#56B4E9", "Moderate" = "#ed7d31", 
+"Structured" = "#F8766D")) + 
+facet_wrap(~ Splicing_Status_3, scales = "free_x") + 
+coord_cartesian(xlim = c(0, 5000), ylim = c(-2.5, 0.0)) + # Confirmed Y-limits match reference 
+labs(x = "3' UTR Length (bp)", y = "MFE Density (kcal/mol/nt)", title = "3' UTR Structural 
+Correlation", color = "Structural Status") + 
+theme_bw(base_size = 14) + 
+theme(plot.title = element_text(face = "bold", size = 14, margin = margin(b = 15)), axis.title.x = 
+element_text(face = "bold"), axis.title.y = element_text(face = "bold"), strip.background = 
+element_blank(), strip.text = element_text(face = "bold", size = 13), legend.position = "bottom", 
+panel.grid.major = element_blank(), panel.grid.minor = element_blank(), plot.margin = 
+margin(10, 25, 15, 10, "pt")) 
+ggsave("C:/temp/UTR_workflow/3_UTR_Structural_Correlation.png", plot = corr_3_plot, width = 
+8.5, height = 6.2, dpi = 300) 
+# ------------------------------------------------------------------------------ 
+# PHASE 4: CONSOLE EXECUTION WRAP-UP 
+# ------------------------------------------------------------------------------ 
+print(dist_5_plot) 
+print(dist_3_plot) 
+print(corr_5_plot) 
+print(corr_3_plot) 
+message("\n==================================================================
+=======") 
+message(">>> SUCCESS: MASTER PIPELINE EXECUTION COMPLETE!") 
+message("    All four polished figures generated and saved to C:/temp/UTR_workflow/") 
+message("====================================================================
+=====")
