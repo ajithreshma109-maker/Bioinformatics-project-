@@ -1,0 +1,46 @@
+# 1. Load required Bioconductor packages 
+library(rtracklayer) 
+library(GenomicRanges) 
+# 2. Define input BED paths and final clean CSV output path 
+utr5_input  <- "C:/Users/Reshma Ajith/Downloads/utr5.bed" 
+utr3_input  <- "C:/Users/Reshma Ajith/Downloads/utr3.bed" 
+final_csv   <- "C:/Users/Reshma Ajith/Downloads/utr_expression_filtered_clean.csv" 
+# 3. Import the BED files back into R as GRanges objects 
+# rtracklayer automatically handles BED formatting rules 
+utr5_gr <- rtracklayer::import.bed(utr5_input) 
+utr3_gr <- rtracklayer::import.bed(utr3_input) 
+# 4. Helper function to extract transcript/gene names and calculate spliced lengths 
+calculate_lengths_from_bed <- function(gr_object, utr_type_label) { 
+# Step A: Extract original transcript and gene names from the BED 'name' column 
+# Our previous script formatted this column as "TranscriptID_GeneName" 
+names_split <- strsplit(gr_object$name, "_") 
+gr_object$transcript_id <- sapply(names_split, `[`, 1) 
+gr_object$gene_id       
+<- sapply(names_split, `[`, 2) 
+# Step B: Calculate discrete lengths using 1-based inclusive biological indexing 
+# width() computes (end - start + 1) for every individual genomic feature 
+gr_object$feature_width <- width(gr_object) 
+# Step C: Convert to data frame and sum widths across exons for the same transcript 
+df <- as.data.frame(gr_object) 
+# Aggregate widths by transcript and gene identifier 
+aggregated_df <- aggregate( 
+feature_width ~ transcript_id + gene_id,  
+data = df,  
+FUN = sum 
+) 
+# Rename length column based on UTR type (e.g., utr5_length) 
+colnames(aggregated_df)[colnames(aggregated_df) == "feature_width"] <- utr_type_label 
+return(aggregated_df) 
+} 
+# 5. Process both files to get independent structural length tables 
+utr5_lengths <- calculate_lengths_from_bed(utr5_gr, "utr5_length") 
+utr3_lengths <- calculate_lengths_from_bed(utr3_gr, "utr3_length") 
+# 6. Merge the 5' and 3' length datasets into a single clean matrix 
+# We use all = TRUE so transcripts with only a 5' UTR or only a 3' UTR are preserved 
+final_matrix <- merge(utr5_lengths, utr3_lengths, by = c("transcript_id", "gene_id"), all = TRUE) 
+# 7. Clean up missing values on original scale (replace structural NA with 0) 
+final_matrix$utr5_length[is.na(final_matrix$utr5_length)] <- 0 
+final_matrix$utr3_length[is.na(final_matrix$utr3_length)] <- 0 
+# 8. Export to your target clean CSV file destination 
+write.csv(final_matrix, file = final_csv, row.names = FALSE) 
+print("Process complete! Clear UTR length matrix saved to utr_expression_filtered_clean.csv")
