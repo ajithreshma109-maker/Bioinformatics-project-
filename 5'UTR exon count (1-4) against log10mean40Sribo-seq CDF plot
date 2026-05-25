@@ -1,0 +1,98 @@
+# 
+============================================================================
+== 
+# GENERATE CLEAN CUMULATIVE FRACTION (CDF) PLOT ONLY 
+# 
+============================================================================
+== 
+library(ggplot2) 
+library(dplyr) 
+ 
+# 1. Load the cleaned master Ribo dataset 
+master_ribo <- read.csv("C:/temp/UTR_workflow/Master_Ribo_No_Duplicates.csv") 
+ 
+# 2. Filter and prepare data for plotting 
+df_cdf <- master_ribo %>% 
+  # Filter for exons 1-4, omit missing metrics, and clean zeroes for log-scale safety 
+  filter( 
+    !is.na(mean_ribo),  
+    mean_ribo > 0, 
+    num_exons_5utr >= 1 & num_exons_5utr <= 4, 
+    !is.na(loop_type),  
+    loop_type != "" 
+  ) %>% 
+  mutate( 
+    # Create clean factor headers for the facet windows 
+    Exon_Label = factor(paste("Exon", num_exons_5utr),  
+                        levels = c("Exon 1", "Exon 2", "Exon 3", "Exon 4")) 
+  ) 
+ 
+# 3. Create the Polished Cumulative Fraction Plot 
+cdf_plot <- ggplot(df_cdf, aes(x = mean_ribo, color = factor(loop_type))) + 
+  # Compute empirical cumulative distribution function steps 
+  stat_ecdf(linewidth = 1.2, geom = "step") + 
+   
+  # Split view cleanly into an Exon 1-4 panel layout 
+  facet_wrap(~Exon_Label, ncol = 2) + 
+   
+  # Set precise matching color scheme for structure styles 
+  scale_color_manual(values = c("Hairpin Loop" = "#415a8c", "Multibranch Junction" = 
+"#e34a33")) + 
+   
+  # Standard base-10 progression for translation metrics 
+  scale_x_log10( 
+    breaks = c(0.1, 1, 10, 100, 1000), 
+    labels = c("0.1", "1.0", "10.0", "100.0", "1,000.0"), 
+    expand = expansion(mult = c(0.05, 0.05)) 
+  ) + 
+   
+  # Explicit probability axis constraints (0 to 1) 
+  scale_y_continuous( 
+    limits = c(0, 1),  
+    expand = expansion(mult = c(0.02, 0.02)) 
+  ) + 
+   
+  labs( 
+    title = "Efficiency Comparison: Hairpin vs. Multibranch Junctions", 
+    x = "Mean Ribo-seq (Log10)", 
+    y = "Cumulative Fraction", 
+    color = "Structure Type" 
+  ) + 
+   
+  # Publication-grade minimalist presentation frame with strong black lines 
+  theme_classic(base_size = 13, base_family = "sans") + 
+  theme( 
+    plot.title = element_text(face = "bold", size = 15, margin = margin(b = 15), hjust = 0.5), 
+     
+    # Sharp, heavy axis title and text settings 
+    axis.title.x = element_text(face = "bold", margin = margin(t = 12)), 
+    axis.title.y = element_text(face = "bold", margin = margin(r = 12)), 
+    axis.text = element_text(color = "#111111", face = "bold"), 
+     
+    # Solid black frame foundations 
+    axis.line = element_line(color = "#111111", linewidth = 0.8),  
+    axis.ticks = element_line(color = "#111111", linewidth = 0.8), 
+    axis.ticks.length = unit(0.15, "cm"), 
+     
+    # Header box aesthetics 
+    strip.text = element_text(face = "bold", size = 12, color = "#111111"), 
+    strip.background = element_rect(color = "#111111", linewidth = 0.8, fill = "#F5F5F5"), 
+     
+    # Complete framing around data panels 
+    panel.border = element_rect(color = "#111111", fill = NA, linewidth = 0.8), 
+     
+    # Total grid background cleanup 
+    panel.grid.major = element_blank(),  
+    panel.grid.minor = element_blank(), 
+     
+    # Layout adjustments for legend positioning 
+    legend.position = "bottom",  
+    legend.title = element_text(face = "bold", size = 11), 
+    legend.text = element_text(size = 10) 
+  ) 
+ 
+# Display the graphic panel inside RStudio 
+print(cdf_plot) 
+# Export high geometric resolution file for layout integration 
+ggsave("C:/temp/UTR_workflow/Clean_CDF_Plot_1_to_4_Exons.png", plot = cdf_plot, width = 
+8.5, height = 7.5, dpi = 300)
