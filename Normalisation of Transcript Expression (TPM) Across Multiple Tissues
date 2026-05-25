@@ -1,0 +1,46 @@
+# 1. Load required packages
+library(dplyr)
+library(tidyr)
+
+# 2. Define your precise file paths
+lengths_file    <- "C:/Users/Reshma Ajith/Downloads/utr_expression_filtered_clean.csv" # Your length matrix
+expression_file <- "C:/Users/Reshma Ajith/Downloads/expression_data.csv"                  # Your raw tissue matrix
+final_output    <- "C:/Users/Reshma Ajith/Downloads/utr_expression_filtered_clean.csv" # Overwriting with final clean data
+
+# 3. Read the incoming data layers
+utr_lengths <- read.csv(lengths_file, stringsAsFactors = FALSE)
+expr_data   <- read.csv(expression_file, stringsAsFactors = FALSE)
+
+# 4. Clean up Transcript IDs
+# If your expression dataset contains version dots (e.g. ENST00000263100.8),
+# this line strips the decimal to ensure it perfectly matches your UTR length table.
+# Replace 'transcript_id' with the exact name of your ID column if it is different.
+expr_data$transcript_id <- sub("\\..*", "", expr_data$transcript_id)
+
+# 5. Extract and process the 53 tissue TPM columns
+# We locate the column containing the tissue matrix array 'expScores'
+# and calculate the median across those tissue entries for every individual transcript.
+processed_expr <- expr_data %>%
+  rowwise() %>%
+  mutate(
+    # A. Compute the median TPM to protect against tissue-specific extremes
+    median_tpm = median(c_across(contains("expScores")), na.rm = TRUE),
+    
+    # B. Apply log10 transformation to reduce right-skewness and balance symmetry.
+    # We add a pseudo-count of +1 to prevent log10(0) mathematical infinity errors.
+    median_log10TPM = log10(median_tpm + 1)
+  ) %>%
+  ungroup() %>%
+  select(transcript_id, median_tpm, median_log10TPM)
+
+# 6. Merge the transformed expression metrics into your structural UTR length data
+final_matrix <- merge(utr_lengths, processed_expr, by = "transcript_id", all.x = TRUE)
+
+# 7. Clean up any missing values
+final_matrix$median_tpm[is.na(final_matrix$median_tpm)] <- 0
+final_matrix$median_log10TPM[is.na(final_matrix$median_log10TPM)] <- 0
+
+# 8. Save the final integrated dataset back to your targeted destination
+write.csv(final_matrix, file = final_output, row.names = FALSE)
+
+print("Pipeline execution complete! 'median_log10TPM' successfully integrated.")
