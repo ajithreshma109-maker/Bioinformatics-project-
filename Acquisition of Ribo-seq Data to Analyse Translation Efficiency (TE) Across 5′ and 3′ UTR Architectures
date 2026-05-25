@@ -1,0 +1,78 @@
+# 1. Load required Bioconductor and tidyverse packages
+library(txdbmaker)
+library(GenomicFeatures)
+library(GenomicRanges)
+library(rtracklayer)
+library(dplyr)
+
+# 2. Define precise file paths
+gtf_file      <- "C:/Users/Reshma Ajith/Downloads/hg38.ensGene.gtf.gz"
+bigwig_80s    <- "C:/Users/Reshma Ajith/Downloads/gwipsvizRiboseq.bw"
+output_csv    <- "C:/temp/UTR_workflow/Transcript_Mean_Riboseq_Values.csv"
+
+# Ensure the output target directory exists
+if (!dir.exists(dirname(output_csv))) {
+  dir.create(dirname(output_csv), recursive = TRUE)
+}
+
+# 3. Extract full transcript-level annotations from the hg38 GTF
+print("Building TxDb object and extracting full transcript coordinates...")
+txdb <- txdbmaker::makeTxDbFromGFF(file = gtf_file, format = "gtf", organism = "Homo sapiens")
+
+# exonicPartsByTranscript keeps only spliced exon blocks per transcript (ignoring introns)
+tx_exons_list <- GenomicFeatures::exonsBy(txdb, by = "tx", use.names = TRUE)
+
+# 4. Load the 80S Ribo-seq BigWig file track object
+bw_80s_selection <- rtracklayer::BigWigFile(bigwig_80s)
+
+# 5. Harmonize Chromosome Nomenclature Styles
+# Align the GTF annotation naming styles to match the incoming BigWig configuration
+GenomicRanges::seqlevelsStyle(tx_exons_list) <- GenomicRanges::seqlevelsStyle(bw_80s_selection)
+
+# Restrict processing strictly to shared chromosomes to protect system memory
+common_chroms <- intersect(GenomicRanges::seqlevels(tx_exons_list), GenomicRanges::seqlevels(bw_80s_selection))
+tx_exons_list <- GenomicRanges::keepSeqlevels(tx_exons_list, common_chroms, pruning.mode = "coarse")
+
+# 6. Query and import 80S coverage data matching transcript blocks
+print("Importing 80S signal coordinates from BigWig...")
+tx_ranges_flat <- unlist(tx_exons_list)
+bw_80s_signals <- rtracklayer::import.bw(bw_80s_selection, which = tx_ranges_flat)
+
+# 7. Map overlapping genomic signals onto structural coordinates
+print("Mapping coverage tracks to compute structural transcript densities...")
+overlaps  <- GenomicRanges::findOverlaps(tx_ranges_flat, bw_80s_signals)
+scores_df <- data.frame(
+  tx_idx  = queryHits(overlaps),
+  signal  = score(bw_80s_signals[subjectHits(overlaps)]),
+  width   = width(pintersect(tx_ranges_flat[queryHits(overlaps)], bw_80s_signals[subjectHits(overlaps)])),
+  stringsAsFactors = FALSE
+)
+
+# 8. Use dplyr to calculate the true weighted mean across full spliced length
+mean_80s_profiles <- scores_df %>%
+  group_by(tx_idx) %>%
+  summarize(mean_80S_riboseq = sum(signal * width) / sum(width)) %>%
+  ungroup()
+
+# Assign calculated scores back into the flat range matrix
+tx_ranges_flat$mean_80S_riboseq <- 0
+tx_ranges_flat$mean_80S_riboseq[mean_80s_profiles$tx_idx] <- mean_80s_profiles$mean_80S_riboseq
+
+# 9. Aggregate multi-exon properties and clean up transcript identifiers
+final_transcript_matrix <- as.data.frame(tx_ranges_flat) %>%
+  group_by(names) %>%
+  summarize(
+    mean_80S_riboseq = mean(mean_80S_riboseq, na.rm = TRUE)
+  ) %>%
+  rename(transcript_id = names) %>%
+  mutate(
+    # Strip version decimal tags (e.g. ENST00000263100.8 -> ENST00000263100)
+    transcript_id = sub("\\..*", "", transcript_id)
+  ) %>%
+  # Deduplicate to preserve a single row per unique transcript model
+  distinct(transcript_id, .keep_all = TRUE)
+
+# 10. Save the compiled translational efficiency profiles
+write.csv(final_transcript_matrix, file = output_csv, row.names = FALSE)
+
+print("Translation workflow complete! Spliced 80S values saved to destination file.")
