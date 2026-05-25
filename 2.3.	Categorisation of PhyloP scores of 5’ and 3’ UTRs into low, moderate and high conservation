@@ -1,0 +1,200 @@
+# Ensure all required presentation libraries are loaded 
+library(readxl) 
+library(ggplot2) 
+library(dplyr) 
+library(purrr) 
+library(ggsignif) 
+# ========================================================================= 
+# FILE PATHS & DIRECTORY CONFIGURATION 
+# ========================================================================= 
+# Master expression file and BED coordinates files 
+path_expr_csv <- "C:/Users/Reshma Ajith/Downloads/utr_expression_filtered_clean.csv" 
+path_bed_5    <- "C:/Users/Reshma Ajith/Downloads/utr5.bed" 
+path_bed_3    <- "C:/Users/Reshma Ajith/Downloads/utr3.bed" 
+# 149 Excel chunk folders for phyloP scores 
+folder_phyloP_5 <- "C:/temp/UTR_workflow/phyloP_scores/" 
+folder_phyloP_3 <- "C:/temp/UTR_workflow/phyloP_scores(utr3)/" 
+# ========================================================================= 
+# STEP 1: IMPORT BED AND EXPRESSION DATA 
+# ========================================================================= 
+# Load master expression database 
+master_expr <- read.csv(path_expr_csv, stringsAsFactors = FALSE) 
+# Load BED files (BED structures store Chrom in V1, Start in V2, End in V3, ID in V4) 
+bed_5utr <- read.table(path_bed_5, sep = "\t", header = FALSE, stringsAsFactors = FALSE) %>% 
+dplyr::select(Chrom = V1, Start = V2, End = V3, transcript_id = V4) %>% 
+  mutate(Start = as.numeric(Start), End = as.numeric(End)) 
+ 
+bed_3utr <- read.table(path_bed_3, sep = "\t", header = FALSE, stringsAsFactors = FALSE) %>% 
+  dplyr::select(Chrom = V1, Start = V2, End = V3, transcript_id = V4) %>% 
+  mutate(Start = as.numeric(Start), End = as.numeric(End)) 
+ 
+# Inherit coordinates onto the master expression layouts via Transcript IDs 
+master_5_coords <- inner_join(master_expr, bed_5utr, by = "transcript_id") 
+master_3_coords <- inner_join(master_expr, bed_3utr, by = "transcript_id") 
+ 
+ 
+# ========================================================================= 
+# STEP 2: LOOP & COMPILE EXCEL CHUNKS 
+# ========================================================================= 
+ 
+files_5 <- list.files(path = folder_phyloP_5, pattern = "^part.*\\.xlsx$", full.names = TRUE) 
+files_3 <- list.files(path = folder_phyloP_3, pattern = "^part.*\\.xlsx$", full.names = TRUE) 
+ 
+# Robust extractor to safely parse coordinates and 'Mean' columns across file splits 
+compile_phyloP_chunks <- function(file_list) { 
+  file_list %>% 
+    map_df(function(file) { 
+      suppressWarnings({ 
+        temp_data <- read_excel(file, skip = 2) 
+        if (!"Chrom" %in% colnames(temp_data)) { 
+          colnames(temp_data)[1:3] <- c("Chrom", "Start", "End") 
+          colnames(temp_data)[10]  <- "Mean" 
+        } else { 
+          colnames(temp_data)[2:3]  <- c("Start", "End") 
+        } 
+        temp_data %>% 
+          dplyr::select(Chrom, Start, End, Mean) %>% 
+          mutate(Start = as.numeric(Start), End = as.numeric(End), Mean = as.numeric(Mean)) 
+      }) 
+    }) %>% filter(!is.na(Mean) & !is.na(Chrom)) 
+} 
+ 
+compiled_phyloP_5 <- compile_phyloP_chunks(files_5) 
+compiled_phyloP_3 <- compile_phyloP_chunks(files_3) 
+ 
+ 
+# ========================================================================= 
+# STEP 3: DATA MERGING & CONSERVATION CATEGORISATION 
+# ========================================================================= 
+ 
+# Final unified dataframe mapping positions to scores for 5' UTR 
+final_data_5 <- inner_join(master_5_coords, compiled_phyloP_5, by = c("Chrom", "Start", 
+"End")) %>% 
+  filter(!is.na(Mean) & !is.na(logTPM)) %>% 
+  mutate( 
+    conservation_group = case_when( 
+      Mean <= 0.5 ~ "Low (<=0.5)", 
+      Mean > 0.5 & Mean <= 2.0 ~ "Moderate (0.5-2.0)", 
+      Mean > 2.0 ~ "High (>2.0)" 
+    ), 
+    conservation_group = factor(conservation_group, levels = c("Low (<=0.5)", "Moderate (0.5
+2.0)", "High (>2.0)")) 
+  ) 
+ 
+# Final unified dataframe mapping positions to scores for 3' UTR 
+final_data_3 <- inner_join(master_3_coords, compiled_phyloP_3, by = c("Chrom", "Start", 
+"End")) %>% 
+  filter(!is.na(Mean) & !is.na(logTPM)) %>% 
+  mutate( 
+    conservation_group = case_when( 
+      Mean <= 0.5 ~ "Low (<=0.5)", 
+      Mean > 0.5 & Mean <= 2.0 ~ "Moderate (0.5-2.0)", 
+      Mean > 2.0 ~ "High (>2.0)" 
+    ), 
+    conservation_group = factor(conservation_group, levels = c("Low (<=0.5)", "Moderate (0.5
+2.0)", "High (>2.0)")) 
+  ) 
+ 
+ 
+# ========================================================================= 
+# STEP 4: MATHEMATICAL UNIFICATION FOR THE PHYLOP DENSITY PLOTS 
+# ========================================================================= 
+ 
+# Density grid math calculations for 5' UTR 
+dens_5 <- density(final_data_5$Mean, na.rm = TRUE) 
+df_dens_5 <- data.frame(x = dens_5$x, y = dens_5$y) %>% 
+  mutate( 
+    conservation_group = case_when(x <= 0.5 ~ "Low (<=0.5)", x > 0.5 & x <= 2.0 ~ "Moderate (0.5
+2.0)", x > 2.0 ~ "High (>2.0)"), 
+    conservation_group = factor(conservation_group, levels = c("Low (<=0.5)", "Moderate (0.5
+2.0)", "High (>2.0)")) 
+  ) 
+ 
+# Density grid math calculations for 3' UTR 
+dens_3 <- density(final_data_3$Mean, na.rm = TRUE) 
+df_dens_3 <- data.frame(x = dens_3$x, y = dens_3$y) %>% 
+  mutate( 
+    conservation_group = case_when(x <= 0.5 ~ "Low (<=0.5)", x > 0.5 & x <= 2.0 ~ "Moderate (0.5
+2.0)", x > 2.0 ~ "High (>2.0)"), 
+    conservation_group = factor(conservation_group, levels = c("Low (<=0.5)", "Moderate (0.5
+2.0)", "High (>2.0)")) 
+) 
+# ========================================================================= 
+# STEP 5: VISUAL GENERATION — PHYLOP DISTRIBUTIONS 
+# ========================================================================= 
+# 5A. 5' UTR Score Distribution Curve 
+dist_plot_5 <- ggplot(df_dens_5, aes(x = x, y = y)) + 
+geom_area(aes(fill = conservation_group), alpha = 0.8) + 
+geom_line(color = "#222222", size = 0.6) + 
+scale_fill_manual(values = c("Low (<=0.5)" = "#5b9bd5", "Moderate (0.5-2.0)" = "#fca34d", "High 
+(>2.0)" = "#e87a5d")) + 
+scale_y_continuous(breaks = c(0.0, 0.2, 0.4, 0.6)) + 
+labs(title = "Distribution of Mean 5' UTR phyloP Scores", x = "Mean phyloP Score", y = "Density", 
+fill = "Conservation Group") + 
+coord_cartesian(xlim = c(-3, 8), ylim = c(0, 0.65)) +  
+theme_classic() + 
+theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), 
+plot.title = element_text(face = "bold", size = 12, hjust = 0.5)) 
+# 5B. 3' UTR Score Distribution Curve 
+dist_plot_3 <- ggplot(df_dens_3, aes(x = x, y = y)) + 
+geom_area(aes(fill = conservation_group), alpha = 0.8) + 
+geom_line(color = "#222222", size = 0.6) + 
+scale_fill_manual(values = c("Low (<=0.5)" = "#5b9bd5", "Moderate (0.5-2.0)" = "#fca34d", "High 
+(>2.0)" = "#e87a5d")) + 
+scale_y_continuous(breaks = c(0.0, 0.2, 0.4, 0.6)) + 
+labs(title = "Distribution of Mean 3' UTR phyloP Scores", x = "Mean phyloP Score", y = "Density", 
+fill = "Conservation Group") + 
+coord_cartesian(xlim = c(-3, 8), ylim = c(0, 0.65)) +  
+theme_classic() + 
+theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), 
+plot.title = element_text(face = "bold", size = 12, hjust = 0.5)) 
+# ========================================================================= 
+# STEP 6: VISUAL GENERATION — MANN-WHITNEY U STATISTICAL BOXPLOTS 
+# ========================================================================= 
+# 6A. Polished 5' UTR Conservation Boxplot 
+max_y5 <- max(final_data_5$logTPM, na.rm = TRUE) 
+box_plot_5 <- ggplot(final_data_5, aes(x = conservation_group, y = logTPM, fill = 
+conservation_group)) + 
+geom_boxplot(width = 0.4, outlier.shape = NA, color = "#222222") + 
+scale_fill_manual(values = c("Low (<=0.5)" = "#5b9bd5", "Moderate (0.5-2.0)" = "#fca34d", "High 
+(>2.0)" = "#e87a5d")) + 
+geom_signif( 
+comparisons = list(c("Low (<=0.5)", "Moderate (0.5-2.0)"), c("Moderate (0.5-2.0)", "High 
+(>2.0)"), c("Low (<=0.5)", "High (>2.0)")), 
+test = "wilcox.test", map_signif_level = function(p) paste0("p = ", formatC(p, format = "e", digits 
+= 1)), 
+y_position = c(max_y5 + 0.5, max_y5 + 1.8, max_y5 + 3.1), textsize = 3.5 
+) + 
+labs(title = "5' UTR Conservation vs Expression Levels", x = "Conservation Group", y = 
+"Expression (logTPM)") + 
+expand_limits(y = max_y5 + 4.5) + theme_classic() + 
+theme(legend.position = "none", plot.title = element_text(face = "bold", size = 12, hjust = 0.5)) 
+# 6B. Polished 3' UTR Conservation Boxplot 
+max_y3 <- max(final_data_3$logTPM, na.rm = TRUE) 
+box_plot_3 <- ggplot(final_data_3, aes(x = conservation_group, y = logTPM, fill = 
+conservation_group)) + 
+geom_boxplot(width = 0.4, outlier.shape = NA, color = "#222222") + 
+scale_fill_manual(values = c("Low (<=0.5)" = "#5b9bd5", "Moderate (0.5-2.0)" = "#fca34d", "High 
+(>2.0)" = "#e87a5d")) + 
+geom_signif( 
+comparisons = list(c("Low (<=0.5)", "Moderate (0.5-2.0)"), c("Moderate (0.5-2.0)", "High 
+(>2.0)"), c("Low (<=0.5)", "High (>2.0)")), 
+test = "wilcox.test", map_signif_level = function(p) paste0("p = ", formatC(p, format = "e", digits 
+= 1)), 
+y_position = c(max_y3 + 0.5, max_y3 + 1.8, max_y3 + 3.1), textsize = 3.5 
+) + 
+labs(title = "3' UTR Conservation vs Expression Levels", x = "Conservation Group", y = 
+"Expression (logTPM)") + 
+expand_limits(y = max_y3 + 4.5) + theme_classic() + 
+theme(legend.position = "none", plot.title = element_text(face = "bold", size = 12, hjust = 0.5)) 
+# ========================================================================= 
+# STEP 7: MONITOR PANEL ROUTING & GRAPHICS FLUSHING 
+# ========================================================================= 
+# Clear the visual history caches safely 
+while(!is.null(dev.list())) dev.off() 
+# Print all 4 completed figures to your RStudio console viewer tab.  
+# Cycle between them using the toolbar arrow buttons. 
+print(dist_plot_5) 
+print(dist_plot_3) 
+print(box_plot_5) 
+print(box_plot_3)
