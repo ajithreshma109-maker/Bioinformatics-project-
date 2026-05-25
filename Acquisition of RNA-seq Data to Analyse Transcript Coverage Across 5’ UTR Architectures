@@ -1,0 +1,170 @@
+# 
+============================================================================
+== 
+# 1. LOAD REQUIRED LIBRARIES 
+# 
+============================================================================
+== 
+library(rtracklayer) 
+library(dplyr) 
+library(GenomicRanges) 
+library(ggplot2) 
+library(ggridges) 
+library(ggrepel) 
+# 
+============================================================================
+== 
+# 2. DATA PREPROCESSING & COVERAGE EXTRACTION 
+# 
+============================================================================
+== 
+# Set working directory to the folder with the BigWig file 
+setwd("C:/Users/Reshma Ajith/Downloads") 
+# Load BigWig genomic track data 
+bw_filename <- "GTEX-Y5V5-0826-SM-4VBQD.Lung.RNAseq.bw" 
+bw_file <- BigWigFile(bw_filename) 
+# Load UTR workflows CSV tables 
+counts_data <- read.csv("C:/temp/UTR_workflow/merged_utr5_splicing_results_counts.csv") 
+struct_data <- read.csv("C:/temp/UTR_workflow/Final_Categorized_5'UTRs.csv") 
+# Standardise table headers to lowercase to ensure field matching consistency 
+colnames(counts_data) <- tolower(colnames(counts_data)) 
+colnames(struct_data) <- tolower(colnames(struct_data)) 
+# Inner join data frames utilizing transcript identifiers 
+final_df <- inner_join(counts_data, struct_data, by = "transcript_id") 
+# Standardize chromosome formatting styles (add 'chr' prefixes where missing) 
+if (!all(grepl("chr", final_df$chrom))) { 
+final_df$chrom <- paste0("chr", gsub("chr", "", final_df$chrom)) 
+} 
+# Construct genomic interval references and extract spatial means 
+gr <- GRanges(seqnames = final_df$chrom,  
+ranges = IRanges(start = final_df$start, end = final_df$end)) 
+cov_summary <- summary(bw_file, which = gr, type = "mean") 
+final_df$mean_5utr_coverage <- unlist(lapply(cov_summary, function(x) x$score)) 
+# Handle zero tracking for non-detectable sequences and export intermediate dataset 
+final_df$mean_5utr_coverage[is.na(final_df$mean_5utr_coverage)] <- 0 
+write.csv(final_df, "C:/temp/UTR_workflow/Final_UTR_Coverage_Data.csv", row.names = FALSE) 
+# 
+============================================================================
+== 
+# 3. GLOBAL PLOT DATA PREPARATION 
+# 
+============================================================================
+== 
+# Filter out structural records with zero coverage to maintain log-scale stability 
+plot_base_df <- final_df %>%  
+filter(mean_5utr_coverage > 0) %>% 
+  # Handle empty or missing values in structural classification fields 
+  filter(!is.na(loop_type), loop_type != "") 
+ 
+# Clean up and factorize the number of exons into standard groups 
+plot_base_df <- plot_base_df %>% 
+  mutate( 
+    exon_group = case_when( 
+      num_exons_5utr >= 8 ~ "8+", 
+      TRUE ~ as.character(num_exons_5utr) 
+    ), 
+    exon_group = factor(exon_group, levels = c("1", "2", "3", "4", "5", "6", "7", "8+")) 
+  ) 
+ 
+ 
+# 
+============================================================================
+== 
+# 4. PLOT 1: CLEAN RIDGELINE PLOT (No Gridlines, Strong Axes, Short Title) 
+# 
+============================================================================
+== 
+ridgeline_plot <- ggplot(plot_base_df, aes(x = mean_5utr_coverage, y = exon_group)) + 
+  geom_density_ridges( 
+    fill = "#5D9CEC",  
+    alpha = 0.85,  
+    rel_min_height = 0.0005,  
+    scale = 1.4,  
+    color = "#FFFFFF",  
+    size = 0.4, 
+    adjust = 1.2 
+  ) +  
+  scale_x_log10( 
+    breaks = c(0.1, 1, 10, 100, 1000), 
+    labels = c("0.1", "1.0", "10.0", "100.0", "1,000.0"), 
+    expand = expansion(mult = c(0.05, 0.05)) 
+  ) + 
+  labs( 
+    title = "5'UTR Coverage by Exon", 
+    x = "Mean 5'UTR Coverage (Log10)", 
+    y = "Number of Exons" 
+  ) + 
+  theme_classic(base_size = 13, base_family = "sans") + 
+  theme( 
+    plot.title = element_text(face = "bold", size = 15, margin = margin(b = 15)), 
+    axis.title.x = element_text(face = "bold", margin = margin(t = 12)), 
+    axis.title.y = element_text(face = "bold", margin = margin(r = 12)), 
+    axis.text = element_text(color = "#111111", face = "bold"), 
+    axis.line = element_line(color = "#111111", linewidth = 0.8),  
+    axis.ticks = element_line(color = "#111111", linewidth = 0.8), 
+    axis.ticks.length = unit(0.2, "cm"), 
+    panel.grid.major = element_blank(),  
+    panel.grid.minor = element_blank() 
+  ) 
+ 
+# Display and export the ridgeline graphic 
+print(ridgeline_plot) 
+ggsave("C:/temp/UTR_workflow/Polished_Ridgeline_Plot.png", plot = ridgeline_plot, width = 7.5, 
+height = 6.5, dpi = 300) 
+ 
+ 
+# 
+============================================================================
+== 
+# 5. PLOT 2: POLISHED SCATTER PLOT (Inventory vs. Biological Success) 
+# 
+============================================================================
+== 
+# Collapse target observations into aggregated grouping profiles 
+efficiency_df <- plot_base_df %>% 
+  group_by(exon_group, loop_type) %>% 
+  summarise( 
+    unique_transcript_count = n_distinct(transcript_id),  
+    median_abundance = median(mean_5utr_coverage), 
+    .groups = 'drop' 
+  ) 
+ 
+scatter_plot <- ggplot(efficiency_df, aes(x = unique_transcript_count, y = median_abundance, 
+color = factor(loop_type))) + 
+  geom_point(aes(size = unique_transcript_count), alpha = 0.85, stroke = 0.5) + 
+  geom_text_repel( 
+    aes(label = paste0(exon_group, " Ex")),  
+    box.padding = 0.6,  
+    point.padding = 0.4, 
+    fontface = "bold",  
+    size = 3.5, 
+    show.legend = FALSE  
+  ) + 
+  scale_y_log10() + 
+  scale_color_brewer(palette = "Set1") + 
+  labs( 
+    title = "Genomic Inventory vs. Biological Success", 
+    x = "Genomic Inventory (Total Unique Transcripts)", 
+    y = "Biological Success (Median RNA-seq Coverage)", 
+    color = "Structure Type", 
+    size = "Inventory Size" 
+  ) + 
+  theme_classic(base_size = 13, base_family = "sans") + 
+  theme( 
+    plot.title = element_text(face = "bold", size = 15, margin = margin(b = 15)), 
+    axis.title.x = element_text(face = "bold", margin = margin(t = 12)), 
+    axis.title.y = element_text(face = "bold", margin = margin(r = 12)), 
+    axis.text = element_text(color = "#111111", face = "bold"), 
+    axis.line = element_line(color = "#111111", linewidth = 0.8),  
+    axis.ticks = element_line(color = "#111111", linewidth = 0.8), 
+    axis.ticks.length = unit(0.2, "cm"), 
+    panel.grid.major = element_blank(),  
+    panel.grid.minor = element_blank(), 
+    legend.position = "right", 
+    legend.title = element_text(face = "bold", size = 11) 
+  ) 
+ 
+# Display and export the scatter graphic 
+print(scatter_plot) 
+ggsave("C:/temp/UTR_workflow/Polished_Scatter_Plot.png", plot = scatter_plot, width = 7.5, 
+height = 6.5, dpi = 300)
