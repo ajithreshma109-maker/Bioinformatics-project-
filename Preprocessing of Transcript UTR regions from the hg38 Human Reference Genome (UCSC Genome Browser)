@@ -1,0 +1,37 @@
+# 1. Load required Bioconductor packages 
+library(txdbmaker) 
+library(GenomicFeatures) 
+library(GenomicRanges) 
+library(rtracklayer) 
+# 2. Define input and output file paths 
+gtf_file    <- "C:/Users/Reshma Ajith/Downloads/hg38.ensGene.gtf.gz" 
+utr5_output <- "C:/Users/Reshma Ajith/Downloads/utr5.bed" 
+utr3_output <- "C:/Users/Reshma Ajith/Downloads/utr3.bed" 
+# 3. Import compressed GTF and create Transcript Database (TxDb) 
+txdb <- txdbmaker::makeTxDbFromGFF(file = gtf_file, format = "gtf", organism = "Homo sapiens") 
+# 4. Extract 5' and 3' UTR coordinates mapped to Transcript IDs 
+five_utrs  <- GenomicFeatures::fiveUTRsByTranscript(txdb, use.names = TRUE) 
+three_utrs <- GenomicFeatures::threeUTRsByTranscript(txdb, use.names = TRUE) 
+# 5. Extract Gene-to-Transcript mapping to append Gene Names 
+tx_metadata <- GenomicFeatures::transcripts(txdb, columns = c("tx_name", "gene_id")) 
+tx_to_gene  <- as.data.frame(tx_metadata) 
+# Create a lookup vector: names are transcript IDs, values are gene IDs 
+gene_lookup        
+<- tx_to_gene$gene_id 
+names(gene_lookup) <- tx_to_gene$tx_name 
+# 6. Helper function to flatten GRangesList and format BED names 
+process_utrs <- function(utr_list, lookup) { 
+utr_gr           
+<- unlist(utr_list) 
+utr_gr$tx_name   <- names(utr_gr) 
+utr_gr$gene_name <- lookup[utr_gr$tx_name] 
+# Format the BED name column as TranscriptID_GeneName 
+utr_gr$name      <- paste(utr_gr$tx_name, utr_gr$gene_name, sep = "_") 
+return(utr_gr) 
+} 
+five_utrs_flat  <- process_utrs(five_utrs, gene_lookup) 
+three_utrs_flat <- process_utrs(three_utrs, gene_lookup) 
+# 7. Export the processed coordinates to your specified BED paths 
+rtracklayer::export.bed(five_utrs_flat, con = utr5_output) 
+rtracklayer::export.bed(three_utrs_flat, con = utr3_output) 
+print("UTR BED files successfully generated in your Downloads folder!")
