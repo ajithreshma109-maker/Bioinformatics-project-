@@ -1,0 +1,161 @@
+library(dplyr) 
+library(ggplot2) 
+# ========================================================================= 
+# 1. LOAD, COLLAPSE DUPLICATES, AND MERGE 
+# ========================================================================= 
+expr_master     <- read.csv("C:/Users/Reshma 
+Ajith/Downloads/utr_expression_filtered_clean.csv", stringsAsFactors = FALSE) 
+categories_data <- read.csv("C:/temp/UTR_workflow/Master_Transcript_Categories.csv", 
+stringsAsFactors = FALSE) 
+# Collapse duplicate genomic positions safely to keep exactly 1 clean row per transcript ID 
+categories_clean <- categories_data %>% distinct(transcript_id, .keep_all = TRUE) 
+# Combine datasets cleanly 1-to-1 via Transcript ID 
+combined_data <- inner_join(expr_master, categories_clean, by = "transcript_id") 
+# ========================================================================= 
+# 2. CALCULATE PURE WITHIN-GENE RAW TPM Z-SCORES 
+# ========================================================================= 
+processed_raw <- combined_data %>% 
+group_by(gene_name) %>% 
+mutate( 
+transcript_count = n(), 
+# STRICTOR PURE RAW Standarisation — NO log transformations or pseudocounts 
+z_score = (median_TPM - mean(median_TPM, na.rm = TRUE)) / sd(median_TPM, na.rm = 
+TRUE) 
+) %>% 
+ungroup() %>% 
+  # Filter out single-transcript genes (division by zero) and invalid entries 
+  filter(transcript_count > 1 & !is.na(z_score) & !is.infinite(z_score)) %>% 
+  # Derive clean structural categories and assign clean factor levels inline safely 
+  mutate( 
+    five_utr_spliced  = ifelse(num_exons_5utr > 1, "Spliced", "Unspliced"), 
+    three_utr_spliced = ifelse(is_spliced_3UTR == TRUE, "Spliced", "Unspliced"), 
+     
+    five_interaction  = paste(five_utr_class, "+", five_utr_spliced), 
+    three_interaction = paste(three_utr_class, "+", three_utr_spliced), 
+     
+    # Locking factor levels here prevents dataframe row size mismatch errors 
+    five_utr_class    = factor(five_utr_class, levels = c("short", "long")), 
+    three_utr_class   = factor(three_utr_class, levels = c("short", "long")), 
+    five_utr_spliced  = factor(five_utr_spliced, levels = c("Unspliced", "Spliced")), 
+    three_utr_spliced = factor(three_utr_spliced, levels = c("Unspliced", "Spliced")) 
+  ) 
+ 
+ 
+# ========================================================================= 
+# UNIFIED GRID-FREE GRAPHICS THEME DEFINITION 
+# ========================================================================= 
+theme_clean_consistent <- function() { 
+  theme_classic() + # Completely grid-free white background framework 
+  theme( 
+    axis.line        = element_line(color = "#000000", size = 0.5),  
+    axis.ticks       = element_line(color = "#000000", size = 0.5), 
+    axis.text        = element_text(color = "#000000", size = 10), 
+    axis.title       = element_text(color = "#000000", size = 11, face = "bold"), 
+    plot.title       = element_text(face = "bold", size = 12, color = "#000000", hjust = 0.5), 
+    legend.title     = element_text(face = "bold", size = 10, color = "#000000"), 
+    legend.text      = element_text(size = 9, color = "#000000"), 
+legend.position  = "right" 
+) 
+} 
+# ========================================================================= 
+# PANEL A: Global Effect of 5'UTR Length (Fitted to 1.2 Max Height) 
+# ========================================================================= 
+plot_A <- ggplot(processed_raw, aes(x = z_score, color = five_utr_class)) + 
+geom_density(size = 1.0, adjust = 0.9, key_glyph = "path") +  
+geom_vline(xintercept = 0, linetype = "dashed", color = "grey50", size = 0.5) + 
+scale_color_manual(values = c("short" = "#5b9bd5", "long" = "#e87a5d")) + 
+scale_y_continuous(breaks = c(0.0, 0.3, 0.6, 0.9, 1.2)) + 
+coord_cartesian(xlim = c(-2.0, 3.0), ylim = c(0, 1.2)) +  
+labs(title = "A: Global Effect of 5'UTR Length", x = "Relative Expression (Raw Z-Score)", y = 
+"Density", color = "5'UTR Length") + 
+theme_clean_consistent() 
+# ========================================================================= 
+# PANEL B: Spliced vs. Unspliced 5'UTR (Fitted to 1.2 Max Height) 
+# ========================================================================= 
+plot_B <- ggplot(processed_raw, aes(x = z_score, color = five_utr_spliced)) + 
+geom_density(size = 1.0, adjust = 0.9, key_glyph = "path") + 
+geom_vline(xintercept = 0, linetype = "dashed", color = "grey50", size = 0.5) + 
+scale_color_manual(values = c("Spliced" = "#e87a5d", "Unspliced" = "#5b9bd5")) + 
+scale_y_continuous(breaks = c(0.0, 0.3, 0.6, 0.9, 1.2)) + 
+coord_cartesian(xlim = c(-2.0, 3.0), ylim = c(0, 1.2)) + 
+labs(title = "B: Spliced vs. Unspliced 5'UTR", x = "Relative Expression (Raw Z-Score)", y = 
+"Density", color = "5'UTR Splicing") + 
+theme_clean_consistent() 
+# ========================================================================= 
+# PANEL C: 5'UTR Interaction Profile (Fitted to 1.2 Max Height) 
+# ========================================================================= 
+plot_C <- ggplot(processed_raw, aes(x = z_score, color = five_interaction)) + 
+geom_density(size = 1.0, adjust = 0.9, key_glyph = "path") + 
+geom_vline(xintercept = 0, linetype = "dashed", color = "grey50", size = 0.5) + 
+scale_color_manual(values = c( 
+"long + Spliced" = "#ff4d4d", "long + Unspliced" = "#33cc33",  
+"short + Spliced" = "#00cccc", "short + Unspliced" = "#cc33ff" 
+)) + 
+scale_y_continuous(breaks = c(0.0, 0.3, 0.6, 0.9, 1.2)) + 
+coord_cartesian(xlim = c(-2.0, 3.0), ylim = c(0, 1.2)) +  
+labs(title = "C: 5'UTR Interaction Profile", x = "Relative Expression (Raw Z-Score)", y = "Density", 
+color = "5'UTR Category") + 
+theme_clean_consistent() 
+# ========================================================================= 
+# PANEL D: Distribution by 3'UTR Class (Fitted to 1.2 Max Height) 
+# ========================================================================= 
+plot_D <- ggplot(processed_raw, aes(x = z_score, color = three_utr_class)) + 
+geom_density(size = 1.0, adjust = 0.9, key_glyph = "path") + 
+geom_vline(xintercept = 0, linetype = "dashed", color = "grey50", size = 0.5) + 
+scale_color_manual(values = c("short" = "#00cccc", "long" = "#ff4d4d")) + 
+scale_y_continuous(breaks = c(0.0, 0.3, 0.6, 0.9, 1.2)) + 
+coord_cartesian(xlim = c(-2.0, 3.0), ylim = c(0, 1.2)) +  
+labs(title = "D: Distribution of Z-Scores by 3'UTR Class", x = "Relative Expression (Raw Z-Score)", 
+y = "Density", color = "3'UTR Length") + 
+theme_clean_consistent() 
+# ========================================================================= 
+# PANEL E: Spliced vs. Unspliced 3'UTRs (Fitted to 1.2 Max Height) 
+# ========================================================================= 
+plot_E <- ggplot(processed_raw, aes(x = z_score, color = three_utr_spliced)) + 
+geom_density(size = 1.0, adjust = 0.9, key_glyph = "path") + 
+geom_vline(xintercept = 0, linetype = "dashed", color = "grey50", size = 0.5) + 
+scale_color_manual(values = c("Spliced" = "#e87a5d", "Unspliced" = "#5b9bd5")) + 
+scale_y_continuous(breaks = c(0.0, 0.3, 0.6, 0.9, 1.2)) + 
+coord_cartesian(xlim = c(-2.0, 3.0), ylim = c(0, 1.2)) +  
+labs(title = "E: Spliced vs. Unspliced 3'UTRs", x = "Relative Expression (Raw Z-Score)", y = 
+"Density", color = "3'UTR Splicing") + 
+theme_clean_consistent() 
+# ========================================================================= 
+# PANEL F: Interaction of 3'UTR Length and Splicing (Fitted to 1.2 Max Height) 
+# ========================================================================= 
+plot_F <- ggplot(processed_raw, aes(x = z_score, color = three_interaction)) + 
+geom_density(size = 1.0, adjust = 0.9, key_glyph = "path") + 
+geom_vline(xintercept = 0, linetype = "dashed", color = "grey50", size = 0.5) + 
+scale_color_manual(values = c( 
+"long + Spliced" = "#ff4d4d", "long + Unspliced" = "#7cae00",  
+"short + Spliced" = "#00cccc", "short + Unspliced" = "#cc33ff" 
+)) + 
+scale_y_continuous(breaks = c(0.0, 0.3, 0.6, 0.9, 1.2)) + 
+coord_cartesian(xlim = c(-2.0, 3.0), ylim = c(0, 1.2)) +  
+labs(title = "F: Interaction of 3'UTR Length and Splicing", x = "Relative Expression (Raw Z
+Score)", y = "Density", color = "3'UTR Category") + 
+theme_clean_consistent() 
+# ========================================================================= 
+# DISPATCH & FILE EXPORT GENERATION 
+# ========================================================================= 
+graphics.off() # Flush all background hardware blocks 
+print(plot_A) 
+print(plot_B) 
+print(plot_C) 
+print(plot_D) 
+print(plot_E) 
+print(plot_F) 
+# Write output files directly to your drive path 
+ggsave("C:/temp/UTR_workflow/density_panel_A.png", plot = plot_A, width = 6, height = 5, dpi = 
+300) 
+ggsave("C:/temp/UTR_workflow/density_panel_B.png", plot = plot_B, width = 6, height = 5, dpi = 
+300) 
+ggsave("C:/temp/UTR_workflow/density_panel_C.png", plot = plot_C, width = 6, height = 5, dpi = 
+300) 
+ggsave("C:/temp/UTR_workflow/density_panel_D.png", plot = plot_D, width = 6, height = 5, dpi = 
+300) 
+ggsave("C:/temp/UTR_workflow/density_panel_E.png", plot = plot_E, width = 6, height = 5, dpi = 
+300) 
+ggsave("C:/temp/UTR_workflow/density_panel_F.png", plot = plot_F, width = 6, height = 5, dpi = 
+300) 
+message("Done! Pure raw TPM Z-score plots saved in C:/temp/UTR_workflow/")
