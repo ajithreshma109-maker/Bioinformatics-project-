@@ -1,0 +1,60 @@
+# 1. Load required Bioconductor packages
+library(txdbmaker)
+library(GenomicFeatures)
+library(GenomicRanges)
+
+# 2. Define exact input path and output destination files
+gtf_file    <- "C:/Users/Reshma Ajith/Downloads/hg38.ensGene.gtf.gz"
+utr5_output <- "C:/temp/UTR_workflow/merged_utr5_splicing_results_counts.csv"
+utr3_output <- "C:/temp/UTR_workflow/merged_utr3_splicing_results_with_counts.csv"
+
+# Ensure the output directory exists on your system
+if (!dir.exists("C:/temp/UTR_workflow")) {
+  dir.create("C:/temp/UTR_workflow", recursive = TRUE)
+}
+
+# 3. Re-import the reference annotation to build the TxDb object
+txdb <- txdbmaker::makeTxDbFromGFF(file = gtf_file, format = "gtf", organism = "Homo sapiens")
+
+# 4. Extract 5' and 3' UTR structural regions grouped by transcript
+five_utrs  <- GenomicFeatures::fiveUTRsByTranscript(txdb, use.names = TRUE)
+three_utrs <- GenomicFeatures::threeUTRsByTranscript(txdb, use.names = TRUE)
+
+# 5. Extract a clean Gene-to-Transcript mapping table
+tx_metadata <- GenomicFeatures::transcripts(txdb, columns = c("tx_name", "gene_id"))
+tx_to_gene  <- as.data.frame(tx_metadata)[, c("tx_name", "gene_id")]
+colnames(tx_to_gene) <-  c("transcript_id", "gene_id")
+
+# 6. Core analysis function to count exons and classify splicing status
+analyze_utr_splicing <- function(utr_list, mapping_df) {
+  
+  # Step A: Count the number of distinct exon features assigned to each transcript ID
+  # elementNROWS calculates lengths across each list entry in the GRangesList
+  exon_counts <- elementNROWS(utr_list)
+  
+  # Step B: Build the initial tabular summary table
+  results_df <- data.frame(
+    transcript_id = names(exon_counts),
+    exon_count    = as.vector(exon_counts),
+    stringsAsFactors = FALSE
+  )
+  
+  # Step C: Quantify structural layout and classify splicing status
+  # > 1 exon = Spliced, exactly 1 exon = Unspliced
+  results_df$splicing_status <- ifelse(results_df$exon_count > 1, "Spliced", "Unspliced")
+  
+  # Step D: Map gene identifiers alongside transcript structures
+  final_df <- merge(mapping_df, results_df, by = "transcript_id", all.y = TRUE)
+  
+  return(final_df)
+}
+
+# 7. Execute quantification workflows for both UTR regions
+utr5_splicing_results <- analyze_utr_splicing(five_utrs, tx_to_gene)
+utr3_splicing_results <- analyze_utr_splicing(three_utrs, tx_to_gene)
+
+# 8. Export metrics to your specified text destinations
+write.csv(utr5_splicing_results, file = utr5_output, row.names = FALSE)
+write.csv(utr3_splicing_results, file = utr3_output, row.names = FALSE)
+
+print("UTR splicing classification and exon quantification files generated successfully!")
