@@ -1,15 +1,12 @@
-# 1. Load required Bioconductor packages
+# 1. Load required Bioconductor and tidyverse packages
 library(rtracklayer)
 library(GenomicRanges)
 library(GenomeInfoDb)
 library(dplyr)
-library(txdbmaker)
-library(GenomicFeatures)
 
 # 2. Define precise file paths
 bigwig_file   <- "C:/Users/Reshma Ajith/Downloads/human_eIF3b_bound_40S.RiboProElong.bw"
-utr5_csv_in   <- "C:/temp/UTR_workflow/merged_utr5_splicing_results_counts.csv"
-gtf_file      <- "C:/Users/Reshma Ajith/Downloads/hg38.ensGene.gtf.gz"
+utr5_bed_in   <- "C:/Users/Reshma Ajith/Downloads/utr5.bed"                         
 master_output <- "C:/temp/UTR_workflow/Master_Ribo_No_Duplicates.csv"
 
 # Ensure the output directory exists
@@ -17,27 +14,29 @@ if (!dir.exists(dirname(master_output))) {
   dir.create(dirname(master_output), recursive = TRUE)
 }
 
-# 3. Load the previously calculated 5' UTR coordinate matrix 
-utr5_data <- read.csv(utr5_csv_in, stringsAsFactors = FALSE)
+# 3. Import 5' UTR coordinates directly from your BED file
+print("Loading coordinates directly from BED file...")
+utr5_ranges <- rtracklayer::import.bed(utr5_bed_in)
 
-# 4. Re-extract structural genomic ranges from the reference database
-txdb <- txdbmaker::makeTxDbFromGFF(file = gtf_file, format = "gtf", organism = "Homo sapiens")
-five_utrs_list <- GenomicFeatures::fiveUTRsByTranscript(txdb, use.names = TRUE)
+# 4. Parse the Transcript ID and Gene Name from the BED 'name' field
+# Your previous script formatted this column as "TranscriptID_GeneName"
+names_split <- strsplit(utr5_ranges$name, "_")
+utr5_ranges$transcript_id <- sapply(names_split, `[`, 1)
+utr5_ranges$gene_id       <- sapply(names_split, `[`, 2)
 
 # 5. Import the BigWig track using an optimised selection object
 bw_selection <- rtracklayer::BigWigFile(bigwig_file)
 
 # 6. Harmonize Chromosome Names (GenomeInfoDb & SeqLevelStyle)
-GenomeInfoDb::seqlevelsStyle(five_utrs_list) <- GenomeInfoDb::seqlevelsStyle(bw_selection)
+GenomeInfoDb::seqlevelsStyle(utr5_ranges) <- GenomeInfoDb::seqlevelsStyle(bw_selection)
 
 # Intersect chromosome maps to keep only valid, shared chromosomes
-common_chroms  <- intersect(GenomeInfoDb::seqlevels(five_utrs_list), GenomeInfoDb::seqlevels(bw_selection))
-five_utrs_list <- GenomeInfoDb::keepSeqlevels(five_utrs_list, common_chroms, pruning.mode = "coarse")
+common_chroms <- intersect(GenomeInfoDb::seqlevels(utr5_ranges), GenomeInfoDb::seqlevels(bw_selection))
+utr5_ranges   <- GenomeInfoDb::keepSeqlevels(utr5_ranges, common_chroms, pruning.mode = "coarse")
 
 # 7. Extract Spliced Coverage Matrix and Calculate Mean Footprint Density
-print("Extracting positional read density from BigWig across 5' UTR coordinates...")
-utr5_ranges  <- unlist(five_utrs_list)
-bw_signals   <- rtracklayer::import.bw(bw_selection, which = utr5_ranges)
+print("Extracting positional read density from BigWig across BED coordinates...")
+bw_signals <- rtracklayer::import.bw(bw_selection, which = utr5_ranges)
 
 # Calculate weighted overlap scores matching each specific UTR block
 overlaps  <- GenomicRanges::findOverlaps(utr5_ranges, bw_signals)
@@ -58,31 +57,26 @@ mean_scores <- scores_df %>%
 utr5_ranges$mean_40S_footprint <- 0  
 utr5_ranges$mean_40S_footprint[mean_scores$tx_idx] <- mean_scores$mean_40S_footprint
 
-# 8. Collapse multi-exon structures into a single row per Transcript ID
-final_ranges_df <- as.data.frame(utr5_ranges) %>%
-  group_by(names) %>%
+# 8. Collapse multi-exon structures into a single row per Transcript ID and retain metadata
+final_matrix <- as.data.frame(utr5_ranges) %>%
+  group_by(transcript_id, gene_id) %>%
   summarize(
-    mean_40S_footprint = mean(mean_40S_footprint, na.rm = TRUE)
+    mean_40S_footprint = mean(mean_40S_footprint, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# 9. Clean up version suffixes, deduplicate, and apply log10 transformation
+master_matrix_clean <- final_matrix %>%
+  mutate(
+    transcript_id = sub("\\..*", "", transcript_id)
   ) %>%
-  rename(transcript_id = names)
-
-# Clean up version suffix formatting on transcript identifiers
-final_ranges_df$transcript_id <- sub("\\..*", "", final_ranges_df$transcript_id)
-utr5_data$transcript_id       <- sub("\\..*", "", utr5_data$transcript_id)
-
-# 9. Merge footprint metrics with your existing splicing data 
-master_matrix <- merge(utr5_data, final_ranges_df, by = "transcript_id", all.x = TRUE)
-master_matrix$mean_40S_footprint[is.na(master_matrix$mean_40S_footprint)] <- 0
-
-# 10. DEDUPLICATE AND LOG10 TRANSFORM
-# Apply the log10 mathematical transformation directly before final output saving
-master_matrix_clean <- master_matrix %>%
   distinct(transcript_id, .keep_all = TRUE) %>%
   mutate(
     mean_40S_footprint_log10 = log10(mean_40S_footprint + 1)
   )
 
-# 11. Save the final processed table
+# 10. Save the final processed table
 write.csv(master_matrix_clean, file = master_output, row.names = FALSE)
 
-print("Master dataset successfully compiled, transformed, and saved!")
+print("Pipeline execution complete! Splicing references removed, master file created.")
+
